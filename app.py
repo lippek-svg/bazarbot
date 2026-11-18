@@ -99,9 +99,8 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené do Firebase databázy!")
 
-# 5. Skener so správnou koreňovou URL pre Bazoš
+# 5. Robustný skener s flexibilným vyhľadávaním položiek v HTML
 def search_bazos(keyword, min_price, max_price, domain="sk"):
-    # Bazoš spracováva vyhľadávanie priamo na hlavnej stránke domény
     url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     
     headers = {
@@ -113,18 +112,16 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
         response = requests.get(url, headers=headers, timeout=10)
         st.write(f"🛠 **[Debug {domain.upper()}]** HTTP Status: `{response.status_code}` | Dĺžka HTML: `{len(response.text)} znakov`")
         
-        if response.status_code != 200 or len(response.text) < 1000:
-            st.warning("Server zrejme blokuje požiadavku alebo vracia anomáliu.")
-            st.code(response.text[:500])
-            
         ads = []
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
-            items = soup.select(".inzeraty")
+            
+            # Flexibilnejšie vyhľadávanie inzerátov v HTML štruktúre Bazoša
+            items = soup.select(".inzeraty") or soup.select(".inzerat") or soup.select("div[class*='inzerat']")
             
             for item in items:
-                title_elem = item.select_one(".nadpis a")
-                price_elem = item.select_one(".cena")
+                title_elem = item.select_one(".nadpis a") or item.select_one("h2 a") or item.select_one("a")
+                price_elem = item.select_one(".cena") or item.select_one("div[class*='cena']")
                 
                 if title_elem:
                     title = title_elem.text.strip()
@@ -134,14 +131,16 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                     
                     price_text = price_elem.text.strip() if price_elem else "Cena neuvedená"
                     
-                    ads.append({
-                        "title": title,
-                        "link": link,
-                        "price": price_text,
-                        "text": f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>"
-                    })
-                    if len(ads) >= 5:
-                        break
+                    # Filtrujeme len relevantné odkazy, ktoré vyzerajú ako inzeráty
+                    if title and link and "/inzerat/" in link:
+                        ads.append({
+                            "title": title,
+                            "link": link,
+                            "price": price_text,
+                            "text": f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>"
+                        })
+                        if len(ads) >= 5:
+                            break
         return ads
     except Exception as e:
         st.error(f"Chyba pripojenia k Bazošovi ({domain}): {e}")
