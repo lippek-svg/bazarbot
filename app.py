@@ -35,13 +35,13 @@ if db:
 
 # 2. Nastavenie vyhľadávania a cien
 st.subheader("🔍 Čo a kde hľadať")
-keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "auto"))
+keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "iphone"))
 
 col_p1, col_p2 = st.columns(2)
 with col_p1:
-    cena_od = st.number_input("Cena od (€)", min_value=0, value=saved_data.get("cena_od", 500), step=10)
+    cena_od = st.number_input("Cena od (€)", min_value=0, value=saved_data.get("cena_od", 0), step=10)
 with col_p2:
-    cena_do = st.number_input("Cena do (€)", min_value=0, value=saved_data.get("cena_do", 10000), step=10)
+    cena_do = st.number_input("Cena do (€)", min_value=0, value=saved_data.get("cena_do", 1000), step=10)
 
 st.write("**Vyber platformy na sledovanie:**")
 col1, col2 = st.columns(2)
@@ -165,14 +165,14 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                     price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
                     date_text = date_elem.get_text(strip=True) if date_elem else ""
                     
-                    is_today = parse_bazos_date_flag(date_text)
+                    is_valid_time = parse_bazos_date_flag(date_text)
                     
                     ads.append({
                         "id": ad_id,
                         "title": title,
                         "link": link,
                         "price": price_text,
-                        "is_today": is_today,
+                        "is_valid_time": is_valid_time,
                         "date_text": date_text,
                         "platform": f"Bazoš ({domain.upper()})"
                     })
@@ -180,9 +180,9 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
     except Exception as e:
         return []
 
-# 5. Skener pre Vinted (cez API)
+# 5. Skener pre Vinted (24-hodinové okno cez API timestamp)
 def search_vinted(keyword, min_price, max_price, domain="sk"):
-    url = f"https://www.vinted.{domain}/api/v2/catalog/items?search_text={keyword}&price_from={min_price}&price_to={max_price}&per_page=20"
+    url = f"https://www.vinted.{domain}/api/v2/catalog/items?search_text={keyword}&price_from={min_price}&price_to={max_price}&per_page=30"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*"
@@ -209,14 +209,16 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
                 created_ts = item.get("created_at_ts")
                 parsed_time = datetime.fromtimestamp(created_ts) if created_ts else datetime.now()
                 
-                is_today = parsed_time.date() == datetime.now().date()
+                # Vinted presné 24-hodinové okno
+                limit_24h = datetime.now() - timedelta(hours=24)
+                is_valid_time = parsed_time >= limit_24h
                 
                 ads.append({
                     "id": f"vinted_{domain}_{item_id}",
                     "title": title,
                     "link": link,
                     "price": price_text,
-                    "is_today": is_today,
+                    "is_valid_time": is_valid_time,
                     "time": parsed_time,
                     "date_text": parsed_time.strftime('%d.%m. %H:%M'),
                     "platform": f"Vinted ({domain.upper()})"
@@ -228,11 +230,11 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
 st.divider()
 
 # 6. TESTOVACIE ROZHRANIE
-st.subheader("🧪 Testovacie rozhranie (Inzeráty za dnešný deň)")
-st.write(f"Aktuálny zistený dátum: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá všetky inzeráty pridané dnes.")
+st.subheader("🧪 Testovacie rozhranie (Inzeráty za posledných 24 hodín)")
+st.write(f"Aktuálny čas: **{datetime.now().strftime('%d.%m.%Y %H:%M')}**. Tlačidlo vyhľadá všetky inzeráty za posledných 24 hodín.")
 
-if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
-    with st.spinner("Sťahujem dnešné inzeráty zo všetkých portálov..."):
+if st.button("🧪 Spustiť test: Zobraziť inzeráty za 24h"):
+    with st.spinner("Sťahujem inzeráty za posledných 24h zo všetkých portálov..."):
         all_ads = []
         if bazos_sk:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
@@ -245,13 +247,13 @@ if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
         if vinted_pl:
             all_ads.extend(search_vinted(keyword, cena_od, cena_do, "pl"))
             
-        today_ads = [ad for ad in all_ads if ad["is_today"]]
+        recent_ads = [ad for ad in all_ads if ad["is_valid_time"]]
         
-        st.success(f"Nájdených **{len(today_ads)}** inzerátov pridaných **dnes**:")
+        st.success(f"Nájdených **{len(recent_ads)}** inzerátov za posledných 24 hodín:")
         
-        if today_ads:
+        if recent_ads:
             platforms_groups = {}
-            for ad in today_ads:
+            for ad in recent_ads:
                 p = ad["platform"]
                 if p not in platforms_groups:
                     platforms_groups[p] = []
@@ -262,12 +264,12 @@ if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
                 for ad in p_ads:
                     st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['date_text']}*)")
         else:
-            st.warning("Pre zadané kritériá sa dnes nenašli žiadne inzeráty.")
+            st.warning("Pre zadané kritériá sa za posledných 24 hodín nenašli žiadne inzeráty.")
             
         with st.expander("🛠️ Zobraziť surový prehľad všetkých stiahnutých inzerátov (Debug)"):
-            st.write(f"Celkovo stiahnutých položiek zo stránok (všetky dátumy): {len(all_ads)}")
+            st.write(f"Celkovo stiahnutých položiek zo stránok: {len(all_ads)}")
             for ad in all_ads:
-                st.write(f"- [{ad['platform']}] {ad['title']} | Dátum text: `{ad.get('date_text')}` | Je dnes: **{ad['is_today']}**")
+                st.write(f"- [{ad['platform']}] {ad['title']} | Čas/Dátum text: `{ad.get('date_text')}` | Vyhovuje 24h: **{ad['is_valid_time']}**")
 
 st.divider()
 
@@ -295,7 +297,7 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
             
             new_ads_found = 0
             for ad in all_ads:
-                if not ad["is_today"]:
+                if not ad["is_valid_time"]:
                     continue
                     
                 if not is_ad_already_sent(ad["id"]):
@@ -307,7 +309,7 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
             if new_ads_found > 0:
                 st.success(f"Odoslaných {new_ads_found} nových inzerátov na Telegram!")
             else:
-                st.info("Žiadne nové inzeráty na odoslanie (všetky dnešné už boli notifikované).")
+                st.info("Žiadne nové inzeráty na odoslanie (všetky čerstvé inzeráty už boli notifikované).")
 
 st.divider()
 
