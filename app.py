@@ -3,15 +3,20 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
 
-# 1. Inicializácia Firebase (funguje lokálne aj v cloude cez Secrets)
+# 1. Inicializácia Firebase priamo zo Streamlit Secrets
 if not firebase_admin._apps:
     try:
-        cred = credentials.Certificate("firebase-credentials.json")
-        firebase_admin.initialize_app(cred)
-    except Exception:
+        # Načítanie sekcie firebase zo st.secrets a konverzia na obyčajný slovník
         firebase_secrets = dict(st.secrets["firebase"])
+        
+        # Oprava formátovania privátneho kľúča (aby prežil newline znaky z TOML)
+        if "private_key" in firebase_secrets:
+            firebase_secrets["private_key"] = firebase_secrets["private_key"].replace("\\n", "\n")
+            
         cred = credentials.Certificate(firebase_secrets)
         firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error(f"Chyba pripojenia k Firebase: {e}")
 
 db = firestore.client()
 
@@ -19,7 +24,11 @@ st.title("🛒 BazarBOT - Multi-platformový sledovač")
 
 # Načítanie existujúcich nastavení z Firebase (ak už existujú)
 doc_ref = db.collection("settings").document("user_config")
-saved_data = doc_ref.get().to_dict() or {}
+saved_data = {}
+try:
+    saved_data = doc_ref.get().to_dict() or {}
+except Exception:
+    pass
 
 # 2. Nastavenie vyhľadávania
 st.subheader("🔍 Čo a kde hľadať")
@@ -35,7 +44,7 @@ with col1:
 
 with col2:
     vinted_sk = st.checkbox("Vinted.sk", value=saved_data.get("vinted_sk", False))
-    vinted_cz = st.checkbox("Vinted.cz", value=saved_data.get("vinted_cz", False))
+    vinted_cz = st.checkbox("Vinted.cz", value=saved_data.get(visual := "vinted_cz", False))
     vinted_pl = st.checkbox("Vinted.pl", value=saved_data.get("vinted_pl", False))
 
 # Podmienené zobrazenie okruhu v km pre Facebook Marketplace
