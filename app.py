@@ -2,6 +2,7 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
+from bs4 import BeautifulSoup
 
 # 1. Bezpečná inicializácia Firebase
 if not firebase_admin._apps:
@@ -15,7 +16,6 @@ if not firebase_admin._apps:
     except Exception as e:
         st.error(f"Chyba pri inicializácii Firebase: {e}")
 
-# Získanie klienta len ak je Firebase inicializovaný
 db = None
 if firebase_admin._apps:
     db = firestore.client()
@@ -32,7 +32,7 @@ if db:
 
 # 2. Nastavenie vyhľadávania
 st.subheader("🔍 Čo a kde hľadať")
-keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "iPhone 15"))
+keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "Herný PC"))
 
 st.write("**Vyber platformy na sledovanie:**")
 col1, col2 = st.columns(2)
@@ -50,6 +50,16 @@ with col2:
 fb_radius = 20
 if fb_market:
     fb_radius = st.slider("Okruh hľadania pre Facebook Marketplace (v km)", min_value=5, max_value=200, value=saved_data.get("fb_radius", 20), step=5)
+
+# Frekvencia hľadania (30 minút až 24 hodín / 1440 minút)
+frequency = st.slider(
+    "Frekvencia hľadania",
+    min_value=30,
+    max_value=1440,
+    value=saved_data.get("frequency", 60),
+    step=30,
+    format="%d minút"
+)
 
 st.divider()
 
@@ -75,6 +85,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
             "vinted_pl": vinted_pl,
             "fb_market": fb_market,
             "fb_radius": fb_radius if fb_market else None,
+            "frequency": frequency,
             "telegram_token": telegram_token,
             "chat_id": chat_id
         }
@@ -90,7 +101,38 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
             (f"FB Marketplace ({fb_radius} km)", fb_market)
         ] if active]
         
-        msg = f"✅ <b>Nastavenia aktualizované</b>\n🔍 Hľadám: <code>{keyword}</code>\n🌐 Platformy: {', '.join(active_platforms)}"
+        msg = f"✅ <b>Nastavenia aktualizované</b>\n🔍 Hľadám: <code>{keyword}</code>\n⏱ Frekvencia: {frequency} min\n🌐 Platformy: {', '.join(active_platforms)}"
         res = send_telegram_alert(telegram_token, chat_id, msg)
         if not res.get("ok"):
             st.error("Chyba pri odosielaní Telegram správy. Skontroluj Token a Chat ID.")
+
+# 5. Skener inzerátov (Bazoš príklad)
+def search_bazos(keyword):
+    url = f"https://bazos.sk/vyhladavanie.php?hledat={keyword}&rubriky=bazos_sk&hlokalita=&cenaod=&cenado=&Submit=Hľadať"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
+    
+    ads = []
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        for item in soup.select(".inzeraty")[:5]:
+            title_elem = item.select_one(".nadpis a")
+            price_elem = item.select_one(".cena")
+            if title_elem:
+                ads.append(f"• {title_elem.text} ({price_elem.text.strip() if price_elem else 'Cena neuvedená'})")
+    return ads
+
+st.divider()
+st.subheader("🚀 Manuálne spustenie")
+if st.button("🔍 Sledovať inzeráty hneď"):
+    if not telegram_token or not chat_id:
+        st.warning("Najprv vyplň Telegram Token a Chat ID.")
+    else:
+        with st.spinner("Prehľadávam bazáre..."):
+            results = search_bazos(keyword)
+            if results:
+                msg = f"🔍 <b>Výsledky pre: {keyword}</b>\n\n" + "\n".join(results)
+                send_telegram_alert(telegram_token, chat_id, msg)
+                st.success("Hľadanie dokončené, výsledky odoslané na Telegram!")
+            else:
+                st.info("Žiadne nové inzeráty sa nenašli.")
