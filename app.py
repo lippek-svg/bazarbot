@@ -6,7 +6,7 @@ import os
 import requests
 from bs4 import BeautifulSoup
 
-# --- 1. INICIALIZÁCIA FIREBASE ---
+# Inicializácia Firebase
 if not firebase_admin._apps:
     try:
         firebase_secret = st.secrets.get("firebase")
@@ -32,7 +32,6 @@ db = firestore.client() if firebase_admin._apps else None
 TELEGRAM_TOKEN = "9264841857:AAHJR2NNilv2KHX3qQEBVuMiTTCh3HM6M6A"
 CHAT_ID = st.secrets.get("CHAT_ID", os.environ.get("CHAT_ID", ""))
 
-# --- 2. POMOCNÉ FUNKCIE ---
 def send_telegram_message(message):
     if not CHAT_ID:
         return False
@@ -86,12 +85,11 @@ def search_bazos(keyword, min_price, max_price, psc="", okolie=25, domain="sk"):
                 })
     except Exception:
         pass
-        
     return ads
 
-# --- 3. STREAMLIT UI ---
-st.title("🤖 BazarBOT Konfigurácia")
+st.title("🤖 BazarBOT Konfigurácia (Viacero kľúčových slov)")
 
+# Načítanie konfigurácie
 config = {}
 if db:
     doc_ref = db.collection("settings").document("user_config")
@@ -99,58 +97,59 @@ if db:
     if doc.exists:
         config = doc.to_dict()
 
-keyword = st.text_input("Kľúčové slovo (napr. tamron 17-28mm)", value=config.get("keyword", ""))
+saved_keywords = config.get("keywords", [{}, {}])
+if len(saved_keywords) < 2:
+    saved_keywords += [{}] * (2 - len(saved_keywords))
 
-col1, col2 = st.columns(2)
+keywords_data = []
 
-with col1:
-    st.subheader("🇸🇰 Bazoš.sk")
-    bazos_sk = st.checkbox("Hľadať na Bazoš.sk", value=config.get("bazos_sk", True))
-    cena_od_sk = st.number_input("Cena od (€)", value=config.get("cena_od_sk", 0))
-    cena_do_sk = st.number_input("Cena do (€)", value=config.get("cena_do_sk", 1000))
-    psc_sk = st.text_input("PSČ (SK)", value=config.get("psc_sk", ""), placeholder="napr. 02801")
-    okolie_sk = st.number_input("Okolie v km (SK)", min_value=0, max_value=200, value=config.get("okolie_sk", 25))
+for i in range(2):
+    kw_conf = saved_keywords[i]
+    with st.expander(f"🔑 Kľúčové slovo #{i+1}: {kw_conf.get('keyword', 'Nenastavené')}", expanded=True):
+        active = st.checkbox(f"Aktívne sledovať", value=kw_conf.get("active", True), key=f"active_{i}")
+        keyword = st.text_input(f"Hľadaný výraz #{i+1}", value=kw_conf.get("keyword", ""), key=f"kw_{i}")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**🇸🇰 Bazoš.sk**")
+            b_sk = st.checkbox("Zapnúť SK", value=kw_conf.get("bazos_sk", True), key=f"bsk_{i}")
+            c_od_sk = st.number_input("Cena od (€)", value=kw_conf.get("cena_od_sk", 0), key=f"codsk_{i}")
+            c_do_sk = st.number_input("Cena do (€)", value=kw_conf.get("cena_do_sk", 1000), key=f"cdosk_{i}")
+            p_sk = st.text_input("PSČ (SK)", value=kw_conf.get("psc_sk", ""), key=f"psk_{i}")
+            o_sk = st.number_input("Okolie (km)", min_value=0, max_value=200, value=kw_conf.get("okolie_sk", 25), key=f"osk_{i}")
+            
+        with col2:
+            st.markdown("**🇨🇿 Bazoš.cz**")
+            b_cz = st.checkbox("Zapnúť CZ", value=kw_conf.get("bazos_cz", False), key=f"bcz_{i}")
+            c_od_cz = st.number_input("Cena od (Kč)", value=kw_conf.get("cena_od_cz", 0), key=f"codcz_{i}")
+            c_do_cz = st.number_input("Cena do (Kč)", value=kw_conf.get("cena_do_cz", 25000), key=f"cdoz_{i}")
+            p_cz = st.text_input("PSČ (CZ)", value=kw_conf.get("psc_cz", ""), key=f"pcz_{i}")
+            o_cz = st.number_input("Okolie (km) ", min_value=0, max_value=200, value=kw_conf.get("okolie_cz", 25), key=f"ocz_{i}")
+            
+        keywords_data.append({
+            "active": active,
+            "keyword": keyword,
+            "bazos_sk": b_sk,
+            "cena_od_sk": c_od_sk,
+            "cena_do_sk": c_do_sk,
+            "psc_sk": p_sk.replace(" ", "").strip(),
+            "okolie_sk": o_sk,
+            "bazos_cz": b_cz,
+            "cena_od_cz": c_od_cz,
+            "cena_do_cz": c_do_cz,
+            "psc_cz": p_cz.replace(" ", "").strip(),
+            "okolie_cz": o_cz,
+        })
 
-with col2:
-    st.subheader("🇨🇿 Bazoš.cz")
-    bazos_cz = st.checkbox("Hľadať na Bazoš.cz", value=config.get("bazos_cz", False))
-    cena_od_cz = st.number_input("Cena od (Kč)", value=config.get("cena_od_cz", 0))
-    cena_do_cz = st.number_input("Cena do (Kč)", value=config.get("cena_do_cz", 25000))
-    psc_cz = st.text_input("PSČ (CZ)", value=config.get("psc_cz", ""), placeholder="napr. 11000")
-    okolie_cz = st.number_input("Okolie v km (CZ)", min_value=0, max_value=200, value=config.get("okolie_cz", 25))
-
-# --- 4. ULOŽENIE A KONTROLA ---
 if st.button("Uložiť nastavenia a overiť inzeráty", type="primary"):
     if not db:
-        st.error("Nepodarilo sa pripojiť k databáze Firebase.")
-    elif not keyword:
-        st.warning("Zadajte kľúčové slovo pre vyhľadávanie.")
+        st.error("Chýba pripojenie k Firebase.")
     else:
-        data_to_save = {
-            "keyword": keyword,
-            "bazos_sk": bazos_sk,
-            "cena_od_sk": cena_od_sk,
-            "cena_do_sk": cena_do_sk,
-            "psc_sk": psc_sk.replace(" ", "").strip(),
-            "okolie_sk": okolie_sk,
-            "bazos_cz": bazos_cz,
-            "cena_od_cz": cena_od_cz,
-            "cena_do_cz": cena_do_cz,
-            "psc_cz": psc_cz.replace(" ", "").strip(),
-            "okolie_cz": okolie_cz,
-        }
+        db.collection("settings").document("user_config").set({"keywords": keywords_data})
+        st.success("Nastavenia úspešne uložené!")
         
-        db.collection("settings").document("user_config").set(data_to_save)
-        st.success("Nastavenia boli úspešne uložené do Firebase.")
-        
-        with st.spinner("Prehľadávam portály a kontrolujem nové inzeráty..."):
+        with st.spinner("Prehľadávam portály pre všetky aktívne slová..."):
             all_ads = []
-            
-            if bazos_sk:
-                all_ads.extend(search_bazos(keyword, cena_od_sk, cena_do_sk, psc_sk, okolie_sk, "sk"))
-            if bazos_cz:
-                all_ads.extend(search_bazos(keyword, cena_od_cz, cena_do_cz, psc_cz, okolie_cz, "cz"))
-                
             sent_ref = db.collection("history").document("sent_ads")
             sent_doc = sent_ref.get()
             sent_ids = sent_doc.to_dict().get("ids", []) if sent_doc.exists else []
@@ -158,28 +157,23 @@ if st.button("Uložiť nastavenia a overiť inzeráty", type="primary"):
             new_sent_ids = list(sent_ids)
             sent_count = 0
             
+            for item in keywords_data:
+                if not item["active"] or not item["keyword"]:
+                    continue
+                if item["bazos_sk"]:
+                    all_ads.extend(search_bazos(item["keyword"], item["cena_od_sk"], item["cena_do_sk"], item["psc_sk"], item["okolie_sk"], "sk"))
+                if item["bazos_cz"]:
+                    all_ads.extend(search_bazos(item["keyword"], item["cena_od_cz"], item["cena_do_cz"], item["psc_cz"], item["okolie_cz"], "cz"))
+            
             for ad in all_ads:
                 if ad["id"] not in sent_ids:
-                    msg = f"🔔 *Nový inzerát!*\n\n*{ad['title']}*\n💰 {ad['price']}\n📍 {ad['location']}\n🔗 [Odkaz na inzerát]({ad['link']})"
+                    msg = f"🔔 *Nový inzerát!*\n\n*{ad['title']}*\n💰 {ad['price']}\n📍 {ad['location']}\n🔗 [Odkaz]({ad['link']})"
                     if send_telegram_message(msg):
                         new_sent_ids.append(ad["id"])
                         sent_count += 1
                         
             if sent_count > 0:
                 sent_ref.set({"ids": new_sent_ids[-200:]})
-                st.success(f"Našiel som a odoslal som **{sent_count}** nových inzerátov na Telegram!")
+                st.success(f"Odoslaných {sent_count} nových inzerátov!")
             else:
-                st.info("Žiadne nové inzeráty (všetky vyhovujúce inzeráty už boli v minulosti odoslané).")
-
-st.divider()
-
-st.subheader("🧪 Test Telegramu")
-if st.button("Otestovať Telegram správu"):
-    if CHAT_ID:
-        success = send_telegram_message("🧪 Testovacia správa z BazarBOT rozhrania úspešná!")
-        if success:
-            st.success("Testovacia správa bola odoslaná!")
-        else:
-            st.error("Nepodarilo sa odoslať správu (skontrolujte CHAT_ID v Secrets).")
-    else:
-        st.warning("Chýba CHAT_ID v nastaveniach (Secrets).")
+                st.info("Žiadne nové inzeráty.")
