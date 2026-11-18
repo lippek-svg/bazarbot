@@ -96,13 +96,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-    if telegram_token and chat_id:
-        msg = f"✅ <b>BazarBOT: Nastavenia aktualizované</b>\n🔍 Hľadám: <code>{keyword}</code>"
-        res = send_telegram_alert(telegram_token, chat_id, msg)
-        if res.get("ok"):
-            st.success("Notifikácia odoslaná na Telegram!")
-
-# 5. Skener pre Bazoš
+# 5. Skener pre Bazoš s diagnostikou
 def search_bazos(keyword, domain="sk"):
     url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}"
     headers = {
@@ -111,6 +105,7 @@ def search_bazos(keyword, domain="sk"):
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
+        st.write(f"🛠 **[Bazoš {domain.upper()}]** Status: `{response.status_code}` | Dĺžka: `{len(response.text)}`")
         ads = []
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
@@ -122,37 +117,33 @@ def search_bazos(keyword, domain="sk"):
                         continue
                     link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
                     
-                    parent = a_tag.find_parent("div") or a_tag.find_parent("table")
-                    price_text = "Cena neuvedená"
-                    if parent:
-                        price_elem = parent.select_one(".cena") or parent.find(string=lambda t: t and ('€' in t or 'Kč' in t))
-                        if price_elem:
-                            price_text = price_elem.text.strip() if hasattr(price_elem, 'text') else str(price_elem).strip()
-
                     item = {
                         "title": f"Bazoš ({domain.upper()}): {title}",
                         "link": link,
-                        "price": price_text,
-                        "telegram_text": f"• Bazoš ({domain.upper()}): <a href='{link}'>{title}</a> — <b>{price_text}</b>"
+                        "price": "Neuvedená",
+                        "telegram_text": f"• Bazoš ({domain.upper()}): <a href='{link}'>{title}</a>"
                     }
                     if item not in ads:
                         ads.append(item)
                         if len(ads) >= 5:
                             break
         return ads
-    except Exception:
+    except Exception as e:
+        st.error(f"Chyba Bazoš: {e}")
         return []
 
-# 5.1 Skener pre Vinted cez oficiálne JSON API
+# 5.1 Skener pre Vinted s diagnostikou API
 def search_vinted(keyword, domain="sk"):
     url = f"https://www.vinted.{domain}/api/v2/catalog/items"
     params = {"search_text": keyword, "per_page": 5}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "Referer": f"https://www.vinted.{domain}/"
     }
     try:
         res = requests.get(url, params=params, headers=headers, timeout=10)
+        st.write(f"🛠 **[Vinted {domain.upper()}]** API Status: `{res.status_code}`")
         ads = []
         if res.status_code == 200:
             data = res.json()
@@ -169,8 +160,11 @@ def search_vinted(keyword, domain="sk"):
                     "price": price,
                     "telegram_text": f"• Vinted ({domain.upper()}): <a href='{link}'>{title}</a> — <b>{price}</b>"
                 })
+        else:
+            st.warning(f"Vinted {domain} vrátil blokovanie alebo chybu (Status {res.status_code}).")
         return ads
-    except Exception:
+    except Exception as e:
+        st.error(f"Chyba Vinted: {e}")
         return []
 
 st.divider()
@@ -196,7 +190,7 @@ if st.button("🔍 Sledovať inzeráty hneď"):
             formatted_lines = [ad["telegram_text"] for ad in all_ads]
             msg = f"🔍 <b>Nájdené inzeráty ({keyword}):</b>\n\n" + "\n".join(formatted_lines)
             send_telegram_alert(telegram_token, chat_id, msg)
-            st.success("Výsledky boli úspešne nájdené a odoslané!")
+            st.success("Výsledky odoslané!")
 
 # 6. Zobrazenie výsledkov
 if "latest_results" in st.session_state:
@@ -205,4 +199,4 @@ if "latest_results" in st.session_state:
         for ad in st.session_state["latest_results"]:
             st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}**")
     else:
-        st.info("Žiadne záznamy sa nenašli.")
+        st.info("Žiadne záznamy sa nenašli. Skontroluj stavové kódy vyššie.")
