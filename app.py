@@ -20,7 +20,7 @@ db = None
 if firebase_admin._apps:
     db = firestore.client()
 
-st.title("🛒 BazarBOT - Multi-platformový sledovač")
+st.title("🛒 BazarBOT - Inteligentný jedinečný strážca")
 
 saved_data = {}
 if db:
@@ -56,7 +56,7 @@ frequency = st.slider(
     "Frekvencia hľadania",
     min_value=30,
     max_value=1440,
-    value=saved_data.get("frequency", 60),
+    value=saved_data.get("frequency", 30),
     step=30,
     format="%d minút"
 )
@@ -77,7 +77,19 @@ def send_telegram_alert(token, chat_id, message):
     except Exception as e:
         return {"ok": False, "description": str(e)}
 
-# 4. Uloženie do Firebase
+# Funkcia na kontrolu, či už bol inzerát poslaný
+def is_ad_already_sent(ad_id):
+    if not db:
+        return False
+    doc_ref = db.collection("sent_ads").document(str(ad_id))
+    return doc_ref.get().exists
+
+# Funkcia na uloženie inzerátu do databázy, aby sa neposielal znova
+def mark_ad_as_sent(ad_id):
+    if db:
+        db.collection("sent_ads").document(str(ad_id)).set({"sent_at": firestore.SERVER_TIMESTAMP})
+
+# 4. Uloženie nastavení do Firebase
 if st.button("💾 Uložiť nastavenia", type="primary"):
     if db:
         config_data = {
@@ -96,7 +108,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 5. Skener pre Bazoš (vracia konkrétne inzeráty)
+# 5. Skener pre Bazoš (vyberá konkrétne inzeráty s ID)
 def search_bazos(keyword, min_price, max_price, domain="sk"):
     url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
@@ -122,65 +134,67 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                         continue
                         
                     link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
+                    
+                    # Získame unikátne ID inzerátu z URL (posledná číselná časť)
+                    parts = href.strip("/").split("/")
+                    ad_id = f"bazos_{domain}_" + (parts[-1] if parts and parts[-1].isdigit() else href)
+                    
                     price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
                     
-                    item_data = {
-                        "title": f"Bazoš ({domain.upper()}): {title}",
+                    ads.append({
+                        "id": ad_id,
+                        "title": title,
                         "link": link,
                         "price": price_text,
-                        "telegram_text": f"• Bazoš ({domain.upper()}): <a href='{link}'>{title}</a> — <b>{price_text}</b>"
-                    }
-                    if item_data not in ads:
-                        ads.append(item_data)
-                        if len(ads) >= 5:
-                            break
+                        "platform": f"Bazoš ({domain.upper()})"
+                    })
         return ads
     except Exception as e:
         st.error(f"Chyba Bazoš: {e}")
         return []
 
-# 5.1 Vinted filtrácia priamo na najnovšie položky v danom rozmedzí
-def search_vinted(keyword, min_price, max_price, domain="sk"):
-    url = f"https://www.vinted.{domain}/catalog?search_text={keyword}&price_from={min_price}&price_to={max_price}&order=newest_first"
-    return [{
-        "title": f"Vinted ({domain.upper()}): Najnovšie ({keyword})",
-        "link": url,
-        "price": f"{min_price}€ - {max_price}€",
-        "telegram_text": f"• Vinted ({domain.upper()}): <a href='{url}'>Zoznam najnovších inzerátov pre <b>{keyword}</b></a>"
-    }]
-
 st.divider()
-st.subheader("🚀 Manuálne spustenie")
+st.subheader("🚀 Manuálne spustenie skenu")
 
-if st.button("🔍 Sledovať inzeráty hneď"):
-    with st.spinner("Prehľadávam platformy..."):
-        all_ads = []
-        if bazos_sk:
-            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
-        if bazos_cz:
-            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
-        if vinted_sk:
-            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "sk"))
-        if vinted_cz:
-            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "cz"))
-        if vinted_pl:
-            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "pl"))
+if st.button("🔍 Skontrolovať nové inzeráty hneď"):
+    if not telegram_token or not chat_id:
+        st.warning("Najprv vyplň Telegram Token a Chat ID.")
+    else:
+        with st.spinner("Hľadám nové inzeráty..."):
+            all_ads = []
+            if bazos_sk:
+                all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
+            if bazos_cz:
+                all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
             
-        st.session_state["latest_results"] = all_ads
-        
-        if all_ads and telegram_token and chat_id:
-            formatted_lines = [ad["telegram_text"] for ad in all_ads]
-            msg = f"🚨 <b>Nové inzeráty za 24h ({keyword}):</b>\n\n" + "\n".join(formatted_lines)
-            send_telegram_alert(telegram_token, chat_id, msg)
-            st.success("Výsledky odoslané na Telegram!")
-        else:
-            st.info("Žiadne záznamy sa nenašli.")
+            new_ads_found = 0
+            
+            # Prejdeme nájdené inzeráty a pošleme LEN tie, ktoré ešte nie sú v databáze (žiadne duplicity)
+            for ad in all_ads:
+                if not is_ad_already_sent(ad["id"]):
+                    # Uložíme do databázy, aby sa už nabudúce neposlal
+                    mark_ad_as_sent(ad["id"])
+                    
+                    # Zostavíme správu pre jeden konkrétny inzerát
+                    msg = f"🚨 <b>Nový inzerát ({ad['platform']}):</b>\n\n• <a href='{ad['link']}'><b>{ad['title']}</b></a>\n💰 Cena: <b>{ad['price']}</b>"
+                    
+                    # Pošleme na Telegram samostatne
+                    send_telegram_alert(telegram_token, chat_id, msg)
+                    new_ads_found += 1
+            
+            st.session_state["latest_results"] = all_ads
+            
+            if new_ads_found > 0:
+                st.success(f"Našiel som a odoslal {new_ads_found} nových inzerátov na Telegram!")
+            else:
+                st.info("Žiadne nové inzeráty (všetky nájdené už boli predtým odoslané).")
 
-# 6. Zobrazenie výsledkov
+# 6. Zobrazenie výsledkov na webe
 if "latest_results" in st.session_state:
-    st.markdown("### 📋 Výsledky skenovania:")
+    st.markdown("### 📋 Posledné skenované inzeráty:")
     if st.session_state["latest_results"]:
         for ad in st.session_state["latest_results"]:
-            st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}**")
+            status_text = "✅ Už poslané" if is_ad_already_sent(ad["id"]) else "🆕 Nový (čaká na odoslanie)"
+            st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** | *{status_text}*")
     else:
         st.info("Žiadne záznamy.")
