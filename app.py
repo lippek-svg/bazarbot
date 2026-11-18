@@ -101,19 +101,23 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 4. Skener pre Bazoš (Dynamicky overuje aktuálny dátum)
+# 4. Opravený skener pre Bazoš s robustným porovnávaním dátumov
 def parse_bazos_date_flag(date_text):
-    """Zistí aktuálny deň v reálnom čase a porovná ho s dátumom v inzeráte."""
     current_date_str = datetime.now().strftime("%d.%m.%Y")
     
-    if current_date_str in date_text or "Dnes" in date_text or "dnes" in date_text.lower():
+    # Vyčistíme text od bielych znakov a skontrolujeme priamu zhodu
+    clean_text = date_text.strip()
+    if current_date_str in clean_text or "dnes" in clean_text.lower():
         return True
     
-    # Extrakcija dátumu formátu DD.MM.YYYY z textu inzerátu
-    match = re.search(r'(\d{2})\.(\d{2})\.(\d{4})', date_text)
+    # Vyhľadanie akéhokoľvek dátumu vo formáte DD.MM.YYYY v texte pomocou regulárneho výrazu
+    match = re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})', clean_text)
     if match:
-        ad_date_str = f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
-        if ad_date_str == current_date_str:
+        day = match.group(1).zfill(2)
+        month = match.group(2).zfill(2)
+        year = match.group(3)
+        found_date = f"{day}.{month}.{year}"
+        if found_date == current_date_str:
             return True
             
     return False
@@ -194,7 +198,6 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
                 created_ts = item.get("created_at_ts")
                 parsed_time = datetime.fromtimestamp(created_ts) if created_ts else datetime.now()
                 
-                # Dynamické porovnanie s aktuálnym dňom
                 is_today = parsed_time.date() == datetime.now().date()
                 
                 ads.append({
@@ -215,7 +218,7 @@ st.divider()
 
 # 6. TESTOVACIE ROZHRANIE - VYPÍŠE VŠETKY DNEŠNÉ INZERÁTY
 st.subheader("🧪 Testovacie rozhranie (Inzeráty za dnešný deň)")
-st.write(f"Aktuálny zistený dátum: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá všetky inzeráty pridané dnes[cite: 7].")
+st.write(f"Aktuálny zistený dátum: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá všetky inzeráty pridané dnes.")
 
 if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
     with st.spinner("Sťahujem dnešné inzeráty zo všetkých portálov..."):
