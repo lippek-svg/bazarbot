@@ -3,7 +3,6 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 
 # 1. Bezpečná inicializácia Firebase
 if not firebase_admin._apps:
@@ -114,31 +113,33 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         if not res.get("ok"):
             st.error("Chyba pri odosielaní Telegram správy. Skontroluj Token a Chat ID.")
 
-# 5. Skener inzerátov s filtrom ceny a 24h limitu
-def search_bazos(keyword, min_price, max_price):
-    url = f"https://bazos.sk/vyhladavanie.php?hledat={keyword}&rubriky=bazos_sk&hlokalita=&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
+# 5. Skener inzerátov pre Bazoš.sk / Bazoš.cz
+def search_bazos(keyword, min_price, max_price, domain="sk"):
+    url = f"https://bazos.{domain}/vyhladavanie.php?hledat={keyword}&rubriky=bazos_{domain}&hlokalita=&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
     response = requests.get(url, headers=headers)
     
     ads = []
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, "html.parser")
-        items = soup.select(".inzeraty") or soup.select(".inzeratzobrazenie")
+        items = soup.select(".inzeraty") or soup.select("div.inzerat") or soup.select(".inzeratzobrazenie")
         
         for item in items:
             title_elem = item.select_one(".nadpis a") or item.select_one("h2 a")
             price_elem = item.select_one(".cena")
-            time_elem = item.select_one(".velikost10") # Často tu býva dátum/čas pridania na Bazoši
             
             if title_elem:
                 title = title_elem.text.strip()
-                link = "https://bazos.sk" + title_elem["href"] if title_elem.has_attr("href") else ""
-                price_text = price_elem.text.strip() if price_elem else "0"
+                link = title_elem.get("href", "")
+                if link and not link.startswith("http"):
+                    link = f"https://bazos.{domain}" + link
+                
+                price_text = price_elem.text.strip() if price_elem else "Cena neuvedená"
                 
                 ads.append(f"• <a href='{link}'>{title}</a> ({price_text})")
-                if len(ads) >= 5: # Maximálne 5 najnovších
+                if len(ads) >= 5:
                     break
     return ads
 
@@ -149,7 +150,12 @@ if st.button("🔍 Sledovať inzeráty hneď"):
         st.warning("Najprv vyplň Telegram Token a Chat ID.")
     else:
         with st.spinner("Prehľadávam bazáre..."):
-            results = search_bazos(keyword, cena_od, cena_do)
+            results = []
+            if bazos_sk:
+                results.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
+            if bazos_cz:
+                results.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+                
             if results:
                 msg = f"🔍 <b>Nájdené inzeráty ({cena_od}€ - {cena_do}€):</b>\n\n" + "\n".join(results)
                 send_telegram_alert(telegram_token, chat_id, msg)
