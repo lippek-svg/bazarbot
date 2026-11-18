@@ -8,7 +8,6 @@ from bs4 import BeautifulSoup
 
 # --- 1. INICIALIZÁCIA FIREBASE ---
 if not firebase_admin._apps:
-    # 1. Pokus načítať zo Streamlit Secrets ([firebase] tabuľka)
     try:
         firebase_secret = st.secrets.get("firebase")
         if firebase_secret:
@@ -18,7 +17,6 @@ if not firebase_admin._apps:
     except Exception:
         pass
 
-    # 2. Fallback na Environment Variables (pre GitHub Actions / iné prostredie)
     if not firebase_admin._apps:
         env_secret = os.environ.get("FIREBASE_CREDENTIALS")
         if env_secret:
@@ -31,11 +29,10 @@ if not firebase_admin._apps:
 
 db = firestore.client() if firebase_admin._apps else None
 
-# Zistenie Telegram tokenu a Chat ID zo Secrets alebo Environment Variables
 TELEGRAM_TOKEN = "9264841857:AAHJR2NNilv2KHX3qQEBVuMiTTCh3HM6M6A"
 CHAT_ID = st.secrets.get("CHAT_ID", os.environ.get("CHAT_ID", ""))
 
-# --- 2. POMOCNÉ FUNKCIE NA VYHĽADÁVANIE A TELEGRAM ---
+# --- 2. POMOCNÉ FUNKCIE ---
 def send_telegram_message(message):
     if not CHAT_ID:
         return False
@@ -78,7 +75,7 @@ def search_bazos(keyword, min_price, max_price, psc="", okolie=25, domain="sk"):
                 title = title_elem.text.strip()
                 link = "https://baz.os" + title_elem['href'] if title_elem['href'].startswith('/') else title_elem['href']
                 price = price_elem.text.strip() if price_elem else "Cena neuvedená"
-                location = loc_elem.text.strip() if location_elem else (loc_elem.text.strip() if loc_elem else "")
+                location = loc_elem.text.strip() if loc_elem else ""
                 
                 ads.append({
                     "id": link,
@@ -95,7 +92,6 @@ def search_bazos(keyword, min_price, max_price, psc="", okolie=25, domain="sk"):
 # --- 3. STREAMLIT UI ---
 st.title("🤖 BazarBOT Konfigurácia")
 
-# Načítanie aktuálnych nastavení z Firebase
 config = {}
 if db:
     doc_ref = db.collection("settings").document("user_config")
@@ -123,7 +119,7 @@ with col2:
     psc_cz = st.text_input("PSČ (CZ)", value=config.get("psc_cz", ""), placeholder="napr. 11000")
     okolie_cz = st.number_input("Okolie v km (CZ)", min_value=0, max_value=200, value=config.get("okolie_cz", 25))
 
-# --- 4. ULOŽENIE A OKAMŽITÉ SPUSTENIE KONTROLY ---
+# --- 4. ULOŽENIE A KONTROLA ---
 if st.button("Uložiť nastavenia a overiť inzeráty", type="primary"):
     if not db:
         st.error("Nepodarilo sa pripojiť k databáze Firebase.")
@@ -144,11 +140,9 @@ if st.button("Uložiť nastavenia a overiť inzeráty", type="primary"):
             "okolie_cz": okolie_cz,
         }
         
-        # 1. Uložíme do Firebase[cite: 1]
         db.collection("settings").document("user_config").set(data_to_save)
-        st.success("Nastavenia boli úspešne uložené do Firebase[cite: 1]!")
+        st.success("Nastavenia boli úspešne uložené do Firebase.")
         
-        # 2. Spustíme okamžité vyhľadávanie
         with st.spinner("Prehľadávam portály a kontrolujem nové inzeráty..."):
             all_ads = []
             
@@ -157,7 +151,6 @@ if st.button("Uložiť nastavenia a overiť inzeráty", type="primary"):
             if bazos_cz:
                 all_ads.extend(search_bazos(keyword, cena_od_cz, cena_do_cz, psc_cz, okolie_cz, "cz"))
                 
-            # Načítanie histórie už poslaných
             sent_ref = db.collection("history").document("sent_ads")
             sent_doc = sent_ref.get()
             sent_ids = sent_doc.to_dict().get("ids", []) if sent_doc.exists else []
@@ -172,7 +165,6 @@ if st.button("Uložiť nastavenia a overiť inzeráty", type="primary"):
                         new_sent_ids.append(ad["id"])
                         sent_count += 1
                         
-            # Aktualizácia histórie vo Firebase
             if sent_count > 0:
                 sent_ref.set({"ids": new_sent_ids[-200:]})
                 st.success(f"Našiel som a odoslal som **{sent_count}** nových inzerátov na Telegram!")
@@ -181,7 +173,6 @@ if st.button("Uložiť nastavenia a overiť inzeráty", type="primary"):
 
 st.divider()
 
-# Testovacie tlačidlo pre istotu
 st.subheader("🧪 Test Telegramu")
 if st.button("Otestovať Telegram správu"):
     if CHAT_ID:
