@@ -46,7 +46,6 @@ col1, col2 = st.columns(2)
 with col1:
     bazos_sk = st.checkbox("Bazoš.sk", value=saved_data.get("bazos_sk", True))
     bazos_cz = st.checkbox("Bazoš.cz", value=saved_data.get("bazos_cz", False))
-    fb_market = st.checkbox("Facebook Marketplace", value=saved_data.get("fb_market", False))
 
 with col2:
     vinted_sk = st.checkbox("Vinted.sk", value=saved_data.get("vinted_sk", False))
@@ -90,7 +89,6 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
             "vinted_sk": vinted_sk,
             "vinted_cz": vinted_cz,
             "vinted_pl": vinted_pl,
-            "fb_market": fb_market,
             "frequency": frequency,
             "telegram_token": telegram_token,
             "chat_id": chat_id
@@ -108,10 +106,9 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
 def search_bazos(keyword, domain="sk"):
     url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept-Language": "sk-SK,sk;q=0.9"
     }
-    
     try:
         response = requests.get(url, headers=headers, timeout=10)
         ads = []
@@ -125,30 +122,73 @@ def search_bazos(keyword, domain="sk"):
                         continue
                     link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
                     
+                    parent = a_tag.find_parent("div") or a_tag.find_parent("table")
+                    price_text = "Cena neuvedená"
+                    if parent:
+                        price_elem = parent.select_one(".cena") or parent.find(string=lambda t: t and ('€' in t or 'Kč' in t))
+                        if price_elem:
+                            price_text = price_elem.text.strip() if hasattr(price_elem, 'text') else str(price_elem).strip()
+
                     item = {
-                        "title": title,
+                        "title": f"Bazoš ({domain.upper()}): {title}",
                         "link": link,
-                        "price": "Neuvedená",
-                        "telegram_text": f"• <a href='{link}'>{title}</a>"
+                        "price": price_text,
+                        "telegram_text": f"• Bazoš ({domain.upper()}): <a href='{link}'>{title}</a> — <b>{price_text}</b>"
                     }
                     if item not in ads:
                         ads.append(item)
                         if len(ads) >= 5:
                             break
         return ads
-    except Exception as e:
+    except Exception:
+        return []
+
+# 5.1 Skener pre Vinted cez oficiálne JSON API
+def search_vinted(keyword, domain="sk"):
+    url = f"https://www.vinted.{domain}/api/v2/catalog/items"
+    params = {"search_text": keyword, "per_page": 5}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
+    try:
+        res = requests.get(url, params=params, headers=headers, timeout=10)
+        ads = []
+        if res.status_code == 200:
+            data = res.json()
+            items = data.get("items", [])
+            for item in items:
+                title = item.get("title", "Neznámy názov")
+                price_obj = item.get("price", {})
+                price = f"{price_obj.get('amount', '')} {price_obj.get('currency_code', '€')}"
+                link = item.get("url", "")
+                
+                ads.append({
+                    "title": f"Vinted ({domain.upper()}): {title}",
+                    "link": link,
+                    "price": price,
+                    "telegram_text": f"• Vinted ({domain.upper()}): <a href='{link}'>{title}</a> — <b>{price}</b>"
+                })
+        return ads
+    except Exception:
         return []
 
 st.divider()
 st.subheader("🚀 Manuálne spustenie")
 
 if st.button("🔍 Sledovať inzeráty hneď"):
-    with st.spinner("Prehľadávam..."):
+    with st.spinner("Prehľadávam platformy..."):
         all_ads = []
         if bazos_sk:
             all_ads.extend(search_bazos(keyword, "sk"))
         if bazos_cz:
             all_ads.extend(search_bazos(keyword, "cz"))
+        if vinted_sk:
+            all_ads.extend(search_vinted(keyword, "sk"))
+        if vinted_cz:
+            all_ads.extend(search_vinted(keyword, "cz"))
+        if vinted_pl:
+            all_ads.extend(search_vinted(keyword, "pl"))
             
         st.session_state["latest_results"] = all_ads
         
@@ -156,12 +196,13 @@ if st.button("🔍 Sledovať inzeráty hneď"):
             formatted_lines = [ad["telegram_text"] for ad in all_ads]
             msg = f"🔍 <b>Nájdené inzeráty ({keyword}):</b>\n\n" + "\n".join(formatted_lines)
             send_telegram_alert(telegram_token, chat_id, msg)
+            st.success("Výsledky boli úspešne nájdené a odoslané!")
 
 # 6. Zobrazenie výsledkov
 if "latest_results" in st.session_state:
     st.markdown("### 📋 Výsledky skenovania:")
     if st.session_state["latest_results"]:
         for ad in st.session_state["latest_results"]:
-            st.markdown(f"- [{ad['title']}]({ad['link']})")
+            st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}**")
     else:
-        st.write("Žiadne záznamy.")
+        st.info("Žiadne záznamy sa nenašli.")
