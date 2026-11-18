@@ -99,10 +99,10 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené do Firebase databázy!")
 
-# 5. Skener so správnymi URL koncovkami pre SK aj CZ
+# 5. Skener so správnou koreňovou URL pre Bazoš
 def search_bazos(keyword, min_price, max_price, domain="sk"):
-    script_name = "vyhladavanie.php" if domain == "sk" else "vyhledavani.php"
-    url = f"https://bazos.{domain}/{script_name}?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}"
+    # Bazoš spracováva vyhľadávanie priamo na hlavnej stránke domény
+    url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
