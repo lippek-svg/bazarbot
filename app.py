@@ -101,10 +101,10 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 4. Skener pre Bazoš (identifikácia dňa - napr. Dnes / Včera / konkrétny dátum)
+# 4. Skener pre Bazoš
 def parse_bazos_date_flag(date_text):
-    """Vráti True, ak je inzerát pridaný Dnes, inak False."""
-    if "Dnes" in date_text:
+    """Skontroluje či text obsahuje 'Dnes' (alebo alternatívy pre dnešný deň)"""
+    if "Dnes" in date_text or "dnes" in date_text.lower():
         return True
     return False
 
@@ -140,7 +140,6 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                     price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
                     date_text = date_elem.get_text(strip=True) if date_elem else ""
                     
-                    # Pre Bazoš kontrolujeme, či je pridaný Dnes
                     is_today = parse_bazos_date_flag(date_text)
                     
                     ads.append({
@@ -185,12 +184,17 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
                 created_ts = item.get("created_at_ts")
                 parsed_time = datetime.fromtimestamp(created_ts) if created_ts else datetime.now()
                 
+                # Zistíme či je z dnešného dňa
+                is_today = parsed_time.date() == datetime.now().date()
+                
                 ads.append({
                     "id": f"vinted_{domain}_{item_id}",
                     "title": title,
                     "link": link,
                     "price": price_text,
+                    "is_today": is_today,
                     "time": parsed_time,
+                    "date_text": parsed_time.strftime('%d.%m. %H:%M'),
                     "platform": f"Vinted ({domain.upper()})"
                 })
         return ads
@@ -199,12 +203,12 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
 
 st.divider()
 
-# 6. TESTOVACIE ROZHRANIE
-st.subheader("🧪 Testovacie rozhranie (Filtrovanie inzerátov)")
-test_hours = st.slider("Zvoľ časové okno pre Vinted (hodiny) / Bazoš filtruje dnešné inzeráty", min_value=1, max_value=48, value=24)
+# 6. TESTOVACIE ROZHRANIE - VYPÍŠE VŠETKY DNEŠNÉ INZERÁTY
+st.subheader("🧪 Testovacie rozhranie (Inzeráty za dnešný deň)")
+st.write(f"Dnešný dátum: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá všetky inzeráty pridané dnes.")
 
-if st.button("🧪 Spustiť testovací filter"):
-    with st.spinner("Sťahujem inzeráty zo všetkých zvolených portálov..."):
+if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
+    with st.spinner("Sťahujem dnešné inzeráty zo všetkých portálov..."):
         all_ads = []
         if bazos_sk:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
@@ -217,23 +221,14 @@ if st.button("🧪 Spustiť testovací filter"):
         if vinted_pl:
             all_ads.extend(search_vinted(keyword, cena_od, cena_do, "pl"))
             
-        limit_time = datetime.now() - timedelta(hours=test_hours)
+        # Filtrujeme len tie, ktoré sú označené ako dnešné
+        today_ads = [ad for ad in all_ads if ad["is_today"]]
         
-        # Filtrovanie: pre Vinted podľa presného času, pre Bazoš podľa toho či je Dnes
-        filtered_ads = []
-        for ad in all_ads:
-            if "Bazoš" in ad["platform"]:
-                if ad["is_today"]: # Bazoš berie inzeráty pridané dnes
-                    filtered_ads.append(ad)
-            else:
-                if "time" in ad and ad["time"] >= limit_time: # Vinted podľa hodín
-                    filtered_ads.append(ad)
+        st.success(f"Nájdených **{len(today_ads)}** inzerátov pridaných **dnes**:")
         
-        st.success(f"Celkovo nájdených {len(filtered_ads)} inzerátov spĺňajúcich kritériá:")
-        
-        if filtered_ads:
+        if today_ads:
             platforms_groups = {}
-            for ad in filtered_ads:
+            for ad in today_ads:
                 p = ad["platform"]
                 if p not in platforms_groups:
                     platforms_groups[p] = []
@@ -242,12 +237,15 @@ if st.button("🧪 Spustiť testovací filter"):
             for platform_name, p_ads in platforms_groups.items():
                 st.markdown(f"### 📌 {platform_name} ({len(p_ads)} inzerátov)")
                 for ad in p_ads:
-                    if "Bazoš" in ad["platform"]:
-                        st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['date_text']}*)")
-                    else:
-                        st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['time'].strftime('%d.%m. %H:%M')}*)")
+                    st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['date_text']}*)")
         else:
-            st.warning("Žiadne inzeráty nevyhoveli filtrom.")
+            st.warning("Pre zadané kritériá sa dnes nenašli žiadne inzeráty.")
+            
+        # Diagnostický box pre kontrolu, či skript vôbec niečo stiahol zo stránok
+        with st.expander("🛠️ Zobraziť surový prehľad všetkých stiahnutých inzerátov (Debug)"):
+            st.write(Celkovo stiahnutých položiek zo stránok (všetky dátumy): {len(all_ads)})
+            for ad in all_ads:
+                st.write(f"- [{ad['platform']}] {ad['title']} | Dátum text: `{ad.get('date_text')}` | Je dnes: **{ad['is_today']}**")
 
 st.divider()
 
@@ -273,9 +271,8 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
             
             new_ads_found = 0
             for ad in all_ads:
-                # Pre Bazoš posielame len tie, čo sú pridané dnes
-                if "Bazoš" in ad["platform"] and not ad["is_today"]:
-                    continue
+                if not ad["is_today"]:
+                    continue # Posielame len dnešné
                     
                 if not is_ad_already_sent(ad["id"]):
                     mark_ad_as_sent(ad["id"])
