@@ -23,7 +23,7 @@ db = None
 if firebase_admin._apps:
     db = firestore.client()
 
-st.title("🛒 BazarBOT - Bazoš strážca")
+st.title("🛒 BazarBOT - Inteligentný strážca inzerátov")
 
 saved_data = {}
 if db:
@@ -43,13 +43,15 @@ with col_p1:
 with col_p2:
     cena_do = st.number_input("Cena do (€)", min_value=0, value=saved_data.get("cena_do", 1000), step=10)
 
-st.write("**Vyber platformu na sledovanie:**")
-col1, col2 = st.columns(2)
+st.write("**Vyber platformy na sledovanie:**")
+col1, col2, col3 = st.columns(3)
 
 with col1:
     bazos_sk = st.checkbox("Bazoš.sk", value=saved_data.get("bazos_sk", True))
 with col2:
     bazos_cz = st.checkbox("Bazoš.cz", value=saved_data.get("bazos_cz", False))
+with col3:
+    bazar_sk = st.checkbox("Bazar.sk", value=saved_data.get("bazar_sk", True))
 
 st.info("🕒 Automatické sledovanie na pozadí je nastavené na interval **každých 60 minút**.")
 
@@ -112,7 +114,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
     if db:
         config_data = {
             "keyword": keyword, "cena_od": cena_od, "cena_do": cena_do,
-            "bazos_sk": bazos_sk, "bazos_cz": bazos_cz,
+            "bazos_sk": bazos_sk, "bazos_cz": bazos_cz, "bazar_sk": bazar_sk,
             "telegram_token": telegram_token, "chat_id": chat_id
         }
         db.collection("settings").document("user_config").set(config_data)
@@ -175,23 +177,78 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
     except Exception as e:
         return []
 
+# 5. Skener pre Bazar.sk
+def search_bazar_sk(keyword, min_price, max_price):
+    url = f"https://www.bazar.sk/inzeraty/{keyword}/?price_from={min_price}&price_to={max_price}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "sk-SK,sk;q=0.9"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        ads = []
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            # Selektor pre karty inzerátov na Bazar.sk
+            items = soup.select(".card-content") or soup.select(".list-item")
+            
+            for item in items:
+                title_elem = item.select_one("a.title") or item.select_one("h2 a")
+                price_elem = item.select_one(".price")
+                date_elem = item.select_one(".date") # Prípadný element s dátumom
+                
+                if title_elem:
+                    title = title_elem.get_text(strip=True)
+                    href = title_elem.get("href", "")
+                    
+                    if not href:
+                        continue
+                        
+                    link = "https://www.bazar.sk" + href if not href.startswith("http") else href
+                    # Vytiahneme ID z URL (zvyčajne posledné číselné ID v ceste)
+                    parts = [p for p in href.strip("/").split("/") if p]
+                    ad_id = "bazar_sk_" + (parts[-1] if parts else href)
+                    
+                    price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
+                    date_text = date_elem.get_text(strip=True) if date_elem else "Dnes"
+                    
+                    # Pre Bazar.sk predpokladáme čerstvosť, prípadne overíme text
+                    is_valid_time = True 
+                    if date_text and ("včera" in date_text.lower() or "dní" in date_text.lower()):
+                        is_valid_time = False
+
+                    ads.append({
+                        "id": ad_id,
+                        "title": title,
+                        "link": link,
+                        "price": price_text,
+                        "is_valid_time": is_valid_time,
+                        "date_text": date_text,
+                        "platform": "Bazar.sk"
+                    })
+        return ads
+    except Exception as e:
+        return []
+
 st.divider()
 
-# 5. TESTOVACIE ROZHRANIE
+# 6. TESTOVACIE ROZHRANIE
 st.subheader("🧪 Testovacie rozhranie (Dnešné inzeráty)")
-st.write(f"Aktuálny čas: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá všetky dnešné inzeráty na Bazoši.")
+st.write(f"Aktuálny čas: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá dnešné inzeráty.")
 
 if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
-    with st.spinner("Sťahujem dnešné inzeráty z Bazoša..."):
+    with st.spinner("Sťahujem dnešné inzeráty z vybraných portálov..."):
         all_ads = []
         if bazos_sk:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
         if bazos_cz:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+        if bazar_sk:
+            all_ads.extend(search_bazar_sk(keyword, cena_od, cena_do))
             
         recent_ads = [ad for ad in all_ads if ad["is_valid_time"]]
         
-        st.success(f"Nájdených **{len(recent_ads)}** inzerátov pridaných dnes:")
+        st.success(f"Nájdených **{len(recent_ads)}** inzerátov:")
         
         if recent_ads:
             platforms_groups = {}
@@ -206,16 +263,16 @@ if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
                 for ad in p_ads:
                     st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['date_text']}*)")
         else:
-            st.warning("Pre zadané kritériá sa dnes nenašli žiadne inzeráty.")
+            st.warning("Pre zadané kritériá sa nenašli žiadne inzeráty.")
             
         with st.expander("🛠️ Zobraziť surový prehľad všetkých stiahnutých inzerátov (Debug)"):
-            st.write(f"Celkovo stiahnutých položiek zo stránok: {len(all_ads)}")
+            st.write(f"Celkovo stiahnutých položiek: {len(all_ads)}")
             for ad in all_ads:
-                st.write(f"- [{ad['platform']}] {ad['title']} | Čas/Dátum text: `{ad.get('date_text')}` | Vyhovuje dnešku: **{ad['is_valid_time']}**")
+                st.write(f"- [{ad['platform']}] {ad['title']} | Čas/Dátum: `{ad.get('date_text')}` | Vyhovuje: **{ad['is_valid_time']}**")
 
 st.divider()
 
-# 6. OSTRÉ SPUSTENIE (Telegram notifikácie + Automatické čistenie DB)
+# 7. OSTRÉ SPUSTENIE (Telegram notifikácie + Automatické čistenie DB)
 st.subheader("🚀 Ostré spustenie (Telegram notifikácie)")
 
 if st.button("🔍 Skontrolovať a poslať na Telegram"):
@@ -230,6 +287,8 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
                 all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
             if bazos_cz:
                 all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+            if bazar_sk:
+                all_ads.extend(search_bazar_sk(keyword, cena_od, cena_do))
             
             new_ads_found = 0
             for ad in all_ads:
@@ -245,18 +304,19 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
             if new_ads_found > 0:
                 st.success(f"Odoslaných {new_ads_found} nových inzerátov na Telegram!")
             else:
-                st.info("Žiadne nové inzeráty na odoslanie (všetky dnešné už boli notifikované).")
+                st.info("Žiadne nové inzeráty na odoslanie.")
 
 st.divider()
 
-# 7. DIAGNOSTIKA / OVEROVACIA FUNKCIA KOMUNIKÁCIE S PORTÁLMI
+# 8. DIAGNOSTIKA / OVEROVACIA FUNKCIA KOMUNIKÁCIE S PORTÁLMI
 st.subheader("🛡️ Diagnostika pripojenia k portálom")
 st.write("Over, či portály odpovedajú a či tvoja IP adresa/server nie je blokovaná.")
 
 if st.button("🩺 Spustiť diagnostický test pripojenia"):
     targets = {
         "Bazoš SK": "https://bazos.sk",
-        "Bazoš CZ": "https://bazos.cz"
+        "Bazoš CZ": "https://bazos.cz",
+        "Bazar.sk": "https://www.bazar.sk"
     }
     
     headers = {
