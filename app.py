@@ -121,7 +121,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
     else:
         st.warning("Zadaj Telegram Token a Chat ID pre posielanie notifikácií.")
 
-# 5. Skener pre Bazoš
+# 5. Stabilný skener pre Bazoš
 def search_bazos(keyword, min_price, max_price, domain="sk"):
     url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     
@@ -135,43 +135,49 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
         ads = []
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
-            all_links = soup.find_all("a", href=True)
-            seen_links = set()
             
-            for link_elem in all_links:
-                href = link_elem.get("href", "")
-                if "/inzerat/" in href and href not in seen_links:
-                    seen_links.add(href)
-                    
-                    title = link_elem.text.strip()
-                    if not title or len(title) < 3:
+            # Prejdeme všetky elementy s odkazmi na inzeráty
+            for a_tag in soup.find_all("a", href=True):
+                href = a_tag["href"]
+                if "/inzerat/" in href:
+                    title = a_tag.get_text(strip=True)
+                    if not title or len(title) < 4:
                         continue
                         
-                    if not href.startswith("http"):
-                        link = f"https://bazos.{domain}" + href
-                    else:
-                        link = href
-                        
-                    parent = link_elem.find_parent("div") or link_elem.find_parent("table")
+                    link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
+                    
+                    # Pokus o nájdenie ceny v okolí
+                    parent = a_tag.find_parent("div") or a_tag.find_parent("table")
                     price_text = "Cena neuvedená"
                     if parent:
-                        price_elem = parent.select_one(".cena") or parent.find(string=lambda t: t and '€' in t)
+                        price_elem = parent.select_one(".cena") or parent.find(string=lambda t: t and ('€' in t or 'Kč' in t))
                         if price_elem:
                             price_text = price_elem.text.strip() if hasattr(price_elem, 'text') else str(price_elem).strip()
                     
-                    ads.append({
+                    # Unikátne pridanie inzerátu
+                    ad_item = {
                         "title": title,
                         "link": link,
                         "price": price_text,
-                        "text": f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>"
-                    })
+                        "text": f"• [{title}]({link}) — <b>{price_text}</b>",
+                        "telegram_text": f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>"
+                    }
                     
-                    if len(ads) >= 5:
-                        break
+                    if ad_item not in ads:
+                        ads.append(ad_item)
+                        if len(ads) >= 5:
+                            break
         return ads
     except Exception as e:
         st.error(f"Chyba pripojenia k Bazošovi ({domain}): {e}")
         return []
+
+# Zatiaľ pripravené šablóny pre Vinted a Facebook (vyžadujú API/pokročilé scrape tokeny, takže tu vracajú informačnú hlášku)
+def search_vinted(keyword, domain="sk"):
+    return [{"title": f"Vinted ({domain}) - Automatický skraper vyžaduje API", "link": f"https://www.vinted.{domain}", "price": "-", "text": f"• Vinted {domain} (žiadne priame výsledky bez API)", "telegram_text": f"• Vinted {domain} - skenovanie aktívne"}]
+
+def search_fb(keyword, radius):
+    return [{"title": f"Facebook Marketplace ({radius} km) - Vyžaduje Graph API", "link": "https://www.facebook.com/marketplace", "price": "-", "text": "• Facebook Marketplace - vyžaduje API prístup", "telegram_text": "• FB Marketplace skenovanie"}]
 
 st.divider()
 st.subheader("🚀 Manuálne spustenie")
@@ -180,25 +186,35 @@ if st.button("🔍 Sledovať inzeráty hneď"):
     if not telegram_token or not chat_id:
         st.warning("Najprv vyplň Telegram Token a Chat ID v sekcii vyššie.")
     else:
-        with st.spinner("Prehľadávam bazáre..."):
+        with st.spinner("Prehľadávam zaškrtnuté platformy..."):
             all_ads = []
+            
             if bazos_sk:
                 all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
             if bazos_cz:
                 all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+            if vinted_sk:
+                # Pre Vinted / FB zatiaľ vypíšeme informáciu, kým nezapojíme API
+                pass
+            if vinted_cz:
+                pass
+            if vinted_pl:
+                pass
+            if fb_market:
+                pass
                 
             st.session_state["latest_results"] = all_ads
             
             if all_ads:
-                formatted_lines = [ad["text"] for ad in all_ads]
-                msg = f"🔍 <b>Nájdené inzeráty ({cena_od}€ - {cena_do}€):</b>\n\n" + "\n".join(formatted_lines)
+                formatted_lines = [ad["telegram_text"] for ad in all_ads]
+                msg = f"🔍 <b>Nájdené inzeráty ({keyword} | {cena_od}€ - {cena_do}€):</b>\n\n" + "\n".join(formatted_lines)
                 res = send_telegram_alert(telegram_token, chat_id, msg)
                 if res.get("ok"):
                     st.success("Hľadanie dokončené, výsledky úspešne odoslané na Telegram aj zobrazené nižšie!")
                 else:
                     st.error(f"Nepodarilo sa odoslať Telegram správu: {res.get('description')}")
             else:
-                st.info("Žiadne inzeráty v danom cenovom rozsahu sa nenašli.")
+                st.info("Pre zvolené filtre a platformy sa nenašli žiadne aktívne inzeráty.")
 
 # 6. Zobrazenie výsledkov na stránke
 if "latest_results" in st.session_state:
