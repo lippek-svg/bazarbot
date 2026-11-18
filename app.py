@@ -101,10 +101,21 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 4. Skener pre Bazoš
+# 4. Skener pre Bazoš (Dynamicky overuje aktuálny dátum)
 def parse_bazos_date_flag(date_text):
-    if "Dnes" in date_text or "dnes" in date_text.lower():
+    """Zistí aktuálny deň v reálnom čase a porovná ho s dátumom v inzeráte."""
+    current_date_str = datetime.now().strftime("%d.%m.%Y")
+    
+    if current_date_str in date_text or "Dnes" in date_text or "dnes" in date_text.lower():
         return True
+    
+    # Extrakcija dátumu formátu DD.MM.YYYY z textu inzerátu
+    match = re.search(r'(\d{2})\.(\d{2})\.(\d{4})', date_text)
+    if match:
+        ad_date_str = f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+        if ad_date_str == current_date_str:
+            return True
+            
     return False
 
 def search_bazos(keyword, min_price, max_price, domain="sk"):
@@ -183,6 +194,7 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
                 created_ts = item.get("created_at_ts")
                 parsed_time = datetime.fromtimestamp(created_ts) if created_ts else datetime.now()
                 
+                # Dynamické porovnanie s aktuálnym dňom
                 is_today = parsed_time.date() == datetime.now().date()
                 
                 ads.append({
@@ -203,7 +215,7 @@ st.divider()
 
 # 6. TESTOVACIE ROZHRANIE - VYPÍŠE VŠETKY DNEŠNÉ INZERÁTY
 st.subheader("🧪 Testovacie rozhranie (Inzeráty za dnešný deň)")
-st.write(f"Dnešný dátum: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá všetky inzeráty pridané dnes.")
+st.write(f"Aktuálny zistený dátum: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá všetky inzeráty pridané dnes[cite: 7].")
 
 if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
     with st.spinner("Sťahujem dnešné inzeráty zo všetkých portálov..."):
