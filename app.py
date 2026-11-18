@@ -34,13 +34,13 @@ if db:
 
 # 2. Nastavenie vyhľadávania a cien
 st.subheader("🔍 Čo a kde hľadať")
-keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "iphone"))
+keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "auto"))
 
 col_p1, col_p2 = st.columns(2)
 with col_p1:
-    cena_od = st.number_input("Cena od (€)", min_value=0, value=saved_data.get("cena_od", 0), step=10)
+    cena_od = st.number_input("Cena od (€)", min_value=0, value=saved_data.get("cena_od", 500), step=10)
 with col_p2:
-    cena_do = st.number_input("Cena do (€)", min_value=0, value=saved_data.get("cena_do", 1000), step=10)
+    cena_do = st.number_input("Cena do (€)", min_value=0, value=saved_data.get("cena_do", 10000), step=10)
 
 st.write("**Vyber platformy na sledovanie:**")
 col1, col2 = st.columns(2)
@@ -101,7 +101,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 4. Skener pre Bazoš (vrátane parsovania času)
+# 4. Skener pre Bazoš (čisté hľadanie: kľúčové slovo + cena, bez kategórií)
 def parse_bazos_date(date_text):
     now = datetime.now()
     try:
@@ -125,10 +125,11 @@ def parse_bazos_date(date_text):
     return now
 
 def search_bazos(keyword, min_price, max_price, domain="sk"):
-    url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
+    # Čisté globálne vyhľadávanie Bazoša bez obmedzenia rubrík/kategórií
+    url = f"https://bazos.{domain}/search.php?hledat={keyword}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "sk-SK,sk;q=0.9"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "sk-SK,sk;q=0.9,cs;q=0.8"
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
@@ -175,7 +176,7 @@ st.divider()
 
 # 5. TESTOVACIE ROZHRANIE (Slider pre časové okno)
 st.subheader("🧪 Testovacie rozhranie (Filtrovanie podľa času)")
-test_hours = st.slider("Zvoľ časové okno (inzeráty za posledných X hodín)", min_value=1, max_value=24, value=5)
+test_hours = st.slider("Zvoľ časové okno (inzeráty za posledných X hodín)", min_value=1, max_value=48, value=24)
 
 if st.button("🧪 Spustiť testovací filter"):
     with st.spinner("Sťahujem inzeráty na test..."):
@@ -189,8 +190,11 @@ if st.button("🧪 Spustiť testovací filter"):
         filtered_ads = [ad for ad in all_ads if ad["time"] >= limit_time]
         
         st.success(f"Nájdených {len(filtered_ads)} inzerátov za posledných {test_hours} hodín:")
-        for ad in filtered_ads:
-            st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['time'].strftime('%d.%m. %H:%M')}*)")
+        if filtered_ads:
+            for ad in filtered_ads:
+                st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['time'].strftime('%d.%m. %H:%M')}*)")
+        else:
+            st.warning("Žiadne inzeráty nevyhoveli filtrom pre zadané kľúčové slovo a cenu.")
 
 st.divider()
 
@@ -220,3 +224,34 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
                 st.success(f"Odoslaných {new_ads_found} nových inzerátov na Telegram!")
             else:
                 st.info("Žiadne nové inzeráty na odoslanie.")
+
+st.divider()
+
+# 7. DIAGNOSTIKA / OVEROVACIA FUNKCIA KOMUNIKÁCIE S PORTÁLMI
+st.subheader("🛡️ Diagnostika pripojenia k portálom")
+st.write("Over, či portály odpovedajú a či tvoja IP adresa/server nie je blokovaná.")
+
+if st.button("🩺 Spustiť diagnostický test pripojenia"):
+    targets = {
+        "Bazoš SK": "https://bazos.sk",
+        "Bazoš CZ": "https://bazos.cz",
+        "Vinted SK": "https://www.vinted.sk",
+        "Vinted CZ": "https://www.vinted.cz",
+        "Vinted PL": "https://www.vinted.pl"
+    }
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    for name, url in targets.items():
+        try:
+            res = requests.get(url, headers=headers, timeout=8)
+            if res.status_code == 200:
+                st.success(f"✅ **{name}**: OK (HTTP 200) — Stránka komunikuje a nie je zablokovaná.")
+            elif res.status_code == 403 or res.status_code == 503:
+                st.error(f"⛔ **{name}**: Blokované / Ochrana proti botom (HTTP {res.status_code})")
+            else:
+                st.warning(f"⚠️ **{name}**: Odpovedalo s kódom HTTP {res.status_code}")
+        except Exception as e:
+            st.error(f"❌ **{name}**: Chyba pripojenia ({e})")
