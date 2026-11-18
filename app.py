@@ -3,17 +3,16 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import json
 import os
+import requests
 
 # Inicializácia Firebase (bezpečné pre opakované načítanie)
 if not firebase_admin._apps:
-    # Ak máš tajný kľúč uložený v GitHub Secrets / Streamlit Secrets ako JSON string
     firebase_secret = os.environ.get("FIREBASE_CREDENTIALS")
     if firebase_secret:
         cred_dict = json.loads(firebase_secret)
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
     else:
-        # Fallback pre lokálne spúšťanie, ak existuje súbor
         if os.path.exists("serviceAccountKey.json"):
             cred = credentials.Certificate("serviceAccountKey.json")
             firebase_admin.initialize_app(cred)
@@ -51,6 +50,7 @@ with col2:
     psc_cz = st.text_input("PSČ (CZ)", value=config.get("psc_cz", ""), placeholder="napr. 11000")
     okolie_cz = st.number_input("Okolie v km (CZ)", min_value=0, max_value=200, value=config.get("okolie_cz", 25))
 
+# Tlačidlo na uloženie nastavení
 if st.button("Uložiť nastavenia", type="primary"):
     if db:
         data_to_save = {
@@ -70,3 +70,27 @@ if st.button("Uložiť nastavenia", type="primary"):
         st.success("Nastavenia boli úspešne uložené do Firebase!")
     else:
         st.error("Nepodarilo sa pripojiť k databáze Firebase.")
+
+st.divider()
+
+# --- TESTOVACIE REŽIMY ---
+st.subheader("🧪 Testovacie nástroje")
+
+if st.button("Otestovať Telegram správu"):
+    token = "9264841857:AAHJR2NNilv2KHX3qQEBVuMiTTCh3HM6M6A"
+    # Sem si môžeš docasne doplniť svoje chat_id alebo ho načítať zo Streamlit Secrets
+    chat_id = st.secrets.get("CHAT_ID", "") 
+    
+    if token and chat_id:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": "🧪 Toto je testovacia správa z BazarBOT rozhrania!"}
+        try:
+            res = requests.post(url, json=payload)
+            if res.status_code == 200:
+                st.success("Testovacia správa bola úspešne odoslaná na Telegram!")
+            else:
+                st.error(f"Chyba pri odosielaní: {res.text}")
+        except Exception as e:
+            st.error(f"Chyba pripojenia: {e}")
+    else:
+        st.warning("Chýba nastavený CHAT_ID v Streamlit Secrets.")
