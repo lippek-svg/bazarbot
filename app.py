@@ -5,6 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import re
+import base64
 
 # 1. Bezpečná inicializácia Firebase
 if not firebase_admin._apps:
@@ -32,7 +33,7 @@ if db:
     except Exception:
         pass
 
-# 2. Nastavenie vyhľadáwania a cien
+# 2. Nastavenie vyhľadávania a cien
 st.subheader("🔍 Čo a kde hľadať")
 keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "auto"))
 
@@ -79,15 +80,22 @@ def send_telegram_alert(token, chat_id, message):
     except Exception as e:
         return {"ok": False, "description": str(e)}
 
+def get_safe_doc_id(ad_id):
+    """Prevedie akékoľvek ID inzerátu na bezpečný reťazec pre Firestore pomocou Base64."""
+    encoded_bytes = base64.urlsafe_b64encode(str(ad_id).encode("utf-8"))
+    return encoded_bytes.decode("utf-8").rstrip("=")
+
 def is_ad_already_sent(ad_id):
     if not db:
         return False
-    doc_ref = db.collection("sent_ads").document(str(ad_id))
+    safe_id = get_safe_doc_id(ad_id)
+    doc_ref = db.collection("sent_ads").document(safe_id)
     return doc_ref.get().exists
 
 def mark_ad_as_sent(ad_id):
     if db:
-        db.collection("sent_ads").document(str(ad_id)).set({"sent_at": firestore.SERVER_TIMESTAMP})
+        safe_id = get_safe_doc_id(ad_id)
+        db.collection("sent_ads").document(safe_id).set({"sent_at": firestore.SERVER_TIMESTAMP})
 
 # Uloženie nastavení do Firebase
 if st.button("💾 Uložiť nastavenia", type="primary"):
@@ -101,17 +109,14 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 4. Skener pre Bazoš (s ošetrením medzier v dátume)
+# 4. Skener pre Bazoš
 def parse_bazos_date_flag(date_text):
     current_date_str = datetime.now().strftime("%d.%m.%Y")
-    
-    # Odstránime všetky medzery z textu (napr. zmení "18.11. 2026" na "18.11.2026")
     clean_date_text = re.sub(r'\s+', '', date_text)
     clean_today = re.sub(r'\s+', '', current_date_str)
     
     if clean_today in clean_date_text or "dnes" in clean_date_text.lower():
         return True
-        
     return False
 
 def search_bazos(keyword, min_price, max_price, domain="sk"):
