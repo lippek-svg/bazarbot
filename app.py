@@ -109,13 +109,12 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         ] if active]
         
         msg = f"✅ <b>Nastavenia aktualizované</b>\n🔍 Hľadám: <code>{keyword}</code> ({cena_od}€ - {cena_do}€)\n⏱ Frekvencia: {frequency} min\n🌐 Platformy: {', '.join(active_platforms)}"
-        res = send_telegram_alert(telegram_token, chat_id, msg)
-        if not res.get("ok"):
-            st.error("Chyba pri odosielaní Telegram správy. Skontroluj Token a Chat ID.")
+        send_telegram_alert(telegram_token, chat_id, msg)
 
-# 5. Stabilný skener pre Bazoš
+# 5. Opravený stabilný skener pre Bazoš
 def search_bazos(keyword, min_price, max_price, domain="sk"):
-    url = f"https://bazos.{domain}/vyhladavanie.php?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}"
+    # URL presne zodpovedajúca vyhľadávaciemu formuláru na Bazoši
+    url = f"https://bazos.{domain}/vyhladavanie.php?hledat={keyword}&rubriky=bazos_{domain}&hlokalita=&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
@@ -124,7 +123,6 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
     ads = []
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, "html.parser")
-        # Bazoš obaľuje inzeráty do triedy .inzeraty
         items = soup.select(".inzeraty")
         
         for item in items:
@@ -139,27 +137,49 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                 
                 price_text = price_elem.text.strip() if price_elem else "Cena neuvedená"
                 
-                ads.append(f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>")
-                if len(ads) >= 5: # Vráti prvých 5 nájdených
+                ads.append({
+                    "title": title,
+                    "link": link,
+                    "price": price_text,
+                    "text": f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>"
+                })
+                if len(ads) >= 5:
                     break
     return ads
 
 st.divider()
-st.subheader("🚀 Manuálne spustenie")
+st.subheader("🚀 Manuálne spustenie a náhľad")
+
 if st.button("🔍 Sledovať inzeráty hneď"):
-    if not telegram_token or not chat_id:
-        st.warning("Najprv vyplň Telegram Token a Chat ID.")
-    else:
-        with st.spinner("Prehľadávam bazáre..."):
-            results = []
-            if bazos_sk:
-                results.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
-            if bazos_cz:
-                results.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
-                
-            if results:
-                msg = f"🔍 <b>Nájdené inzeráty ({cena_od}€ - {cena_do}€):</b>\n\n" + "\n".join(results)
+    with st.spinner("Prehľadávam bazáre..."):
+        all_ads = []
+        if bazos_sk:
+            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
+        if bazos_cz:
+            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+            
+        if all_ads:
+            # Uloženie do session_state, aby sa to zobrazilo dole na stránke
+            st.session_state["latest_results"] = all_ads
+            
+            # Sformátovanie správy pre Telegram aj náhľad
+            formatted_lines = [ad["text"] for ad in all_ads]
+            msg = f"🔍 <b>Nájdené inzeráty ({cena_od}€ - {cena_do}€):</b>\n\n" + "\n".join(formatted_lines)
+            
+            if telegram_token and chat_id:
                 send_telegram_alert(telegram_token, chat_id, msg)
-                st.success("Hľadanie dokončené, výsledky odoslané na Telegram!")
+                st.success("Hľadanie dokončené, výsledky odoslané na Telegram aj zobrazené nižšie!")
             else:
-                st.info("Žiadne inzeráty v danom cenovom rozsahu sa nenašli.")
+                st.warning("Výsledky sú nájdené, ale nie je vyplnený Telegram Token/Chat ID (správa nebola odoslaná na Telegram).")
+        else:
+            st.session_state["latest_results"] = []
+            st.info("Žiadne inzeráty v danom cenovom rozsahu sa nenašli.")
+
+# 6. Zobrazenie výstupu priamo na spodku stránky
+if "latest_results" in st.session_state:
+    st.markdown("### 📋 Posledné nájdené výsledky (Náhľad správy):")
+    if st.session_state["latest_results"]:
+        for ad in st.session_state["latest_results"]:
+            st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}**")
+    else:
+        st.write("Žiadne záznamy na zobrazenie.")
