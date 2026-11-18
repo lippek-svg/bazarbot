@@ -88,32 +88,42 @@ def main():
         return
         
     config = doc.to_dict()
-    keyword = config.get("keyword", "")
-    if not keyword:
-        print("Nie je zadané žiadne kľúčové slovo.")
+    keywords_list = config.get("keywords", [])
+    
+    if not keywords_list:
+        print("Žiadne kľúčové slová nie sú nastavené.")
         return
 
     all_ads = []
 
-    if config.get("bazos_sk", True):
-        all_ads.extend(search_bazos(
-            keyword=keyword,
-            min_price=config.get("cena_od_sk", 0),
-            max_price=config.get("cena_do_sk", 1000),
-            psc=config.get("psc_sk", ""),
-            okolie=config.get("okolie_sk", 25),
-            domain="sk"
-        ))
+    # Prechod cez všetky nastavené kľúčové slová
+    for kw_conf in keywords_list:
+        if not kw_conf.get("active", True) or not kw_conf.get("keyword"):
+            continue
+            
+        keyword = kw_conf["keyword"]
 
-    if config.get("bazos_cz", False):
-        all_ads.extend(search_bazos(
-            keyword=keyword,
-            min_price=config.get("cena_od_cz", 0),
-            max_price=config.get("cena_do_cz", 25000),
-            psc=config.get("psc_cz", ""),
-            okolie=config.get("okolie_cz", 25),
-            domain="cz"
-        ))
+        # Bazoš SK
+        if kw_conf.get("bazos_sk", True):
+            all_ads.extend(search_bazos(
+                keyword=keyword,
+                min_price=kw_conf.get("cena_od_sk", 0),
+                max_price=kw_conf.get("cena_do_sk", 1000),
+                psc=kw_conf.get("psc_sk", ""),
+                okolie=kw_conf.get("okolie_sk", 25),
+                domain="sk"
+            ))
+
+        # Bazoš CZ
+        if kw_conf.get("bazos_cz", False):
+            all_ads.extend(search_bazos(
+                keyword=keyword,
+                min_price=kw_conf.get("cena_od_cz", 0),
+                max_price=kw_conf.get("cena_do_cz", 25000),
+                psc=kw_conf.get("psc_cz", ""),
+                okolie=kw_conf.get("okolie_cz", 25),
+                domain="cz"
+            ))
 
     sent_ref = db.collection("history").document("sent_ads")
     sent_doc = sent_ref.get()
