@@ -101,28 +101,12 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 4. Skener pre Bazoš
-def parse_bazos_date(date_text):
-    now = datetime.now()
-    try:
-        if "Dnes" in date_text:
-            time_match = re.search(r'(\d{1,2}):(\d{2})', date_text)
-            if time_match:
-                hour, minute = int(time_match.group(1)), int(time_match.group(2))
-                return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        elif "Včera" in date_text:
-            time_match = re.search(r'(\d{1,2}):(\d{2})', date_text)
-            if time_match:
-                hour, minute = int(time_match.group(1)), int(time_match.group(2))
-                return (now - timedelta(days=1)).replace(hour=hour, minute=minute, second=0, microsecond=0)
-        else:
-            date_match = re.search(r'(\d{1,2})\.(\d{1,2})\.\s*(\d{4})', date_text)
-            if date_match:
-                day, month, year = map(int, date_match.groups())
-                return datetime(year, month, day)
-    except Exception:
-        pass
-    return now
+# 4. Skener pre Bazoš (identifikácia dňa - napr. Dnes / Včera / konkrétny dátum)
+def parse_bazos_date_flag(date_text):
+    """Vráti True, ak je inzerát pridaný Dnes, inak False."""
+    if "Dnes" in date_text:
+        return True
+    return False
 
 def search_bazos(keyword, min_price, max_price, domain="sk"):
     url = f"https://bazos.{domain}/search.php?hledat={keyword}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
@@ -154,15 +138,18 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                     ad_id = f"bazos_{domain}_" + (parts[-1] if parts and parts[-1].isdigit() else href)
                     
                     price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
-                    date_text = date_elem.get_text(strip=True) if date_text else ""
-                    parsed_time = parse_bazos_date(date_text)
+                    date_text = date_elem.get_text(strip=True) if date_elem else ""
+                    
+                    # Pre Bazoš kontrolujeme, či je pridaný Dnes
+                    is_today = parse_bazos_date_flag(date_text)
                     
                     ads.append({
                         "id": ad_id,
                         "title": title,
                         "link": link,
                         "price": price_text,
-                        "time": parsed_time,
+                        "is_today": is_today,
+                        "date_text": date_text,
                         "platform": f"Bazoš ({domain.upper()})"
                     })
         return ads
@@ -179,7 +166,7 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
     try:
         session = requests.Session()
         session.headers.update(headers)
-        session.get(f"https://www.vinted.{domain}", timeout=5) # Získanie session cookies
+        session.get(f"https://www.vinted.{domain}", timeout=5)
         
         response = session.get(url, timeout=10)
         ads = []
@@ -212,9 +199,9 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
 
 st.divider()
 
-# 6. TESTOVACIE ROZHRANIE (Rozdelené do kategórií podľa platforiem)
-st.subheader("🧪 Testovacie rozhranie (Filtrovanie podľa času a kategórií)")
-test_hours = st.slider("Zvoľ časové okno (inzeráty za posledných X hodín)", min_value=1, max_value=48, value=24)
+# 6. TESTOVACIE ROZHRANIE
+st.subheader("🧪 Testovacie rozhranie (Filtrovanie inzerátov)")
+test_hours = st.slider("Zvoľ časové okno pre Vinted (hodiny) / Bazoš filtruje dnešné inzeráty", min_value=1, max_value=48, value=24)
 
 if st.button("🧪 Spustiť testovací filter"):
     with st.spinner("Sťahujem inzeráty zo všetkých zvolených portálov..."):
@@ -231,12 +218,20 @@ if st.button("🧪 Spustiť testovací filter"):
             all_ads.extend(search_vinted(keyword, cena_od, cena_do, "pl"))
             
         limit_time = datetime.now() - timedelta(hours=test_hours)
-        filtered_ads = [ad for ad in all_ads if ad["time"] >= limit_time]
         
-        st.success(f"Celkovo nájdených {len(filtered_ads)} inzerátov za posledných {test_hours} hodín:")
+        # Filtrovanie: pre Vinted podľa presného času, pre Bazoš podľa toho či je Dnes
+        filtered_ads = []
+        for ad in all_ads:
+            if "Bazoš" in ad["platform"]:
+                if ad["is_today"]: # Bazoš berie inzeráty pridané dnes
+                    filtered_ads.append(ad)
+            else:
+                if "time" in ad and ad["time"] >= limit_time: # Vinted podľa hodín
+                    filtered_ads.append(ad)
+        
+        st.success(f"Celkovo nájdených {len(filtered_ads)} inzerátov spĺňajúcich kritériá:")
         
         if filtered_ads:
-            # Rozdelenie do kategórií podľa platformy
             platforms_groups = {}
             for ad in filtered_ads:
                 p = ad["platform"]
@@ -247,7 +242,10 @@ if st.button("🧪 Spustiť testovací filter"):
             for platform_name, p_ads in platforms_groups.items():
                 st.markdown(f"### 📌 {platform_name} ({len(p_ads)} inzerátov)")
                 for ad in p_ads:
-                    st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['time'].strftime('%d.%m. %H:%M')}*)")
+                    if "Bazoš" in ad["platform"]:
+                        st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['date_text']}*)")
+                    else:
+                        st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['time'].strftime('%d.%m. %H:%M')}*)")
         else:
             st.warning("Žiadne inzeráty nevyhoveli filtrom.")
 
@@ -275,6 +273,10 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
             
             new_ads_found = 0
             for ad in all_ads:
+                # Pre Bazoš posielame len tie, čo sú pridané dnes
+                if "Bazoš" in ad["platform"] and not ad["is_today"]:
+                    continue
+                    
                 if not is_ad_already_sent(ad["id"]):
                     mark_ad_as_sent(ad["id"])
                     msg = f"🚨 <b>Nový inzerát ({ad['platform']}):</b>\n\n• <a href='{ad['link']}'><b>{ad['title']}</b></a>\n💰 Cena: <b>{ad['price']}</b>"
