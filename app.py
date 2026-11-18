@@ -55,14 +55,7 @@ with col2:
     vinted_cz = st.checkbox("Vinted.cz", value=saved_data.get("vinted_cz", False))
     vinted_pl = st.checkbox("Vinted.pl", value=saved_data.get("vinted_pl", False))
 
-frequency = st.slider(
-    "Frekvencia hľadania",
-    min_value=30,
-    max_value=1440,
-    value=saved_data.get("frequency", 30),
-    step=30,
-    format="%d minút"
-)
+st.info("🕒 Automatické sledovanie na pozadí je nastavené na interval **každých 60 minút**.")
 
 st.divider()
 
@@ -81,7 +74,6 @@ def send_telegram_alert(token, chat_id, message):
         return {"ok": False, "description": str(e)}
 
 def get_safe_doc_id(ad_id):
-    """Prevedie akékoľvek ID inzerátu na bezpečný reťazec pre Firestore pomocou Base64."""
     encoded_bytes = base64.urlsafe_b64encode(str(ad_id).encode("utf-8"))
     return encoded_bytes.decode("utf-8").rstrip("=")
 
@@ -97,6 +89,28 @@ def mark_ad_as_sent(ad_id):
         safe_id = get_safe_doc_id(ad_id)
         db.collection("sent_ads").document(safe_id).set({"sent_at": firestore.SERVER_TIMESTAMP})
 
+def clean_old_sent_ads():
+    """Automaticky vymaže z Firebase sent_ads záznamy staršie ako 48 hodín."""
+    if not db:
+        return
+    try:
+        limit_time = datetime.now() - timedelta(hours=48)
+        old_docs = db.collection("sent_ads").where("sent_at", "<", limit_time).stream()
+        
+        batch = db.batch()
+        count = 0
+        for doc in old_docs:
+            batch.delete(doc.reference)
+            count += 1
+            if count >= 400:
+                batch.commit()
+                batch = db.batch()
+                count = 0
+        if count > 0:
+            batch.commit()
+    except Exception as e:
+        print(f"Chyba pri čistení databázy: {e}")
+
 # Uloženie nastavení do Firebase
 if st.button("💾 Uložiť nastavenia", type="primary"):
     if db:
@@ -104,7 +118,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
             "keyword": keyword, "cena_od": cena_od, "cena_do": cena_do,
             "bazos_sk": bazos_sk, "bazos_cz": bazos_cz,
             "vinted_sk": vinted_sk, "vinted_cz": vinted_cz, "vinted_pl": vinted_pl,
-            "frequency": frequency, "telegram_token": telegram_token, "chat_id": chat_id
+            "telegram_token": telegram_token, "chat_id": chat_id
         }
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
@@ -213,7 +227,7 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
 
 st.divider()
 
-# 6. TESTOVACIE ROZHRANIE - VYPÍŠE VŠETKY DNEŠNÉ INZERÁTY
+# 6. TESTOVACIE ROZHRANIE
 st.subheader("🧪 Testovacie rozhranie (Inzeráty za dnešný deň)")
 st.write(f"Aktuálny zistený dátum: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá všetky inzeráty pridané dnes.")
 
@@ -257,14 +271,16 @@ if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
 
 st.divider()
 
-# 7. Ostré spustenie (Telegram notifikácie)
+# 7. OSTRÉ SPUSTENIE (Telegram notifikácie + Automatické čistenie DB)
 st.subheader("🚀 Ostré spustenie (Telegram notifikácie)")
 
 if st.button("🔍 Skontrolovať a poslať na Telegram"):
     if not telegram_token or not chat_id:
         st.warning("Najprv vyplň Telegram Token a Chat ID.")
     else:
-        with st.spinner("Hľadám nové inzeráty..."):
+        with st.spinner("Hľadám nové inzeráty a prečisťujem databázu..."):
+            clean_old_sent_ads()
+            
             all_ads = []
             if bazos_sk:
                 all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
@@ -291,7 +307,7 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
             if new_ads_found > 0:
                 st.success(f"Odoslaných {new_ads_found} nových inzerátov na Telegram!")
             else:
-                st.info("Žiadne nové inzeráty na odoslanie.")
+                st.info("Žiadne nové inzeráty na odoslanie (všetky dnešné už boli notifikované).")
 
 st.divider()
 
