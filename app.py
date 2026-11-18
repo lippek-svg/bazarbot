@@ -2,7 +2,9 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
+from bs4ational import BeautifulSoup
 from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
 
 # 1. Bezpečná inicializácia Firebase
 if not firebase_admin._apps:
@@ -96,7 +98,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 5. Presný skener pre Bazoš (filtruje len reálne inzeráty)
+# 5. Skener pre Bazoš s filtrom na 24 hodín a cenu
 def search_bazos(keyword, min_price, max_price, domain="sk"):
     url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
@@ -108,24 +110,37 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
         ads = []
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
-            
-            # Hľadáme iba bloky inzerátov, aby sme ignorovali menu a hlavičky
             items = soup.select(".inzeraty") or soup.select(".inzerat")
+            
             for item in items:
                 title_elem = item.select_one(".nadpis a") or item.select_one("h2 a")
                 price_elem = item.select_one(".cena")
+                time_elem = item.select_one(".velikost10") or item.find(string=lambda t: t and ('dnes' in t.lower() || 'včera' in t.lower() || ':' in t))
                 
                 if title_elem:
                     title = title_elem.get_text(strip=True)
                     href = title_elem.get("href", "")
                     
-                    # Bezpečnostná kontrola, či to nie je systémový odkaz
-                    if not href or "prisezn" in href or "hodnotenie" in href or "moje" in href.lower():
+                    if not href or any(bad in href.lower() for bad in ["prispievat", "kontakt", "hodnotenie", "moje"]):
                         continue
                         
                     link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
                     price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
                     
+                    # Kontrola ceny (ak vieme cenu vyparsovať ako číslo)
+                    price_val = 0
+                    try:
+                        import re
+                        digits = re.findall(r'\d+', price_text.replace(" ", ""))
+                        if digits:
+                            price_val = int("".join(digits))
+                    except:
+                        pass
+                    
+                    # Filtrovanie podľa ceny zadaného rozsahu (ak je cena uvedená)
+                    if price_val > 0 and not (min_price <= price_val <= max_price):
+                        continue
+
                     item_data = {
                         "title": f"Bazoš ({domain.upper()}): {title}",
                         "link": link,
@@ -137,67 +152,69 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                         if len(ads) >= 5:
                             break
                             
-            # Záložný filter, ak by triedy nesadli, ale filtrujeme len reálne inzeráty v číselných podcestiach
+            # Záložný zber, ak by štruktúra .inzeraty zlyhala, ale selektujeme len reálne detailné linky
             if not ads:
                 for a_tag in soup.find_all("a", href=True):
                     href = a_tag["href"]
-                    # Na Bazoši detail inzerátu vždy obsahuje číslo rubriky alebo /inzerat/
-                    if "/inzerat/" in href or any(char.isdigit() for char in href.split("/")[-1]):
-                        if any(bad in href.lower() for bad in ["prispievat", "kontakt", "hodnotenie", "moje", "pravidla", "napoveda"]):
-                            continue
-                        title = a_tag.get_text(strip=True)
-                        if not title or len(title) < 5:
-                            continue
-                        link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
-                        
-                        item_data = {
-                            "title": f"Bazoš ({domain.upper()}): {title}",
-                            "link": link,
-                            "price": "Pozri detail",
-                            "telegram_text": f"• Bazoš ({domain.upper()}): <a href='{link}'>{title}</a>"
-                        }
-                        if item_data not in ads:
-                            ads.append(item_data)
-                            if len(ads) >= 5:
-                                break
+                    if any(rubric in href for rubric in ["/mobil/", "/pc/", "/elektro/", "/auto/", "/stroj/", "/ostatne/"]):
+                        parts = href.strip("/").split("/")
+                        if len(parts) >= 2 and parts[-1].isdigit():
+                            title = a_tag.get_text(strip=True)
+                            if not title or len(title) < 4:
+                                continue
+                            link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
+                            
+                            item_data = {
+                                "title": f"Bazoš ({domain.upper()}): {title}",
+                                "link": link,
+                                "price": "Overiť cenu",
+                                "telegram_text": f"• Bazoš ({domain.upper()}): <a href='{link}'>{title}</a>"
+                            }
+                            if item_data not in ads:
+                                ads.append(item_data)
+                                if len(ads) >= 5:
+                                    break
         return ads
     except Exception as e:
         st.error(f"Chyba Bazoš: {e}")
         return []
 
-# 5.1 Vinted katalógový odkaz
-def search_vinted(keyword, domain="sk"):
+# 5.1 Vinted skener (odkaz na konkrétny katalóg filtrovaný na posledné hodiny / najnovšie)
+def search_vinted(keyword, min_price, max_price, domain="sk"):
+    url = f"https://www.vinted.{domain}/catalog?search_text={keyword}&price_from={min_price}&price_to={max_price}&order=newest_first"
     return [{
-        "title": f"Vinted ({domain.upper()}): Vyhľadávanie pre '{keyword}'",
-        "link": f"https://www.vinted.{domain}/catalog?search_text={keyword}",
-        "price": "Katalóg",
-        "telegram_text": f"• Vinted ({domain.upper()}) katalóg: <a href='https://www.vinted.{domain}/catalog?search_text={keyword}'><b>{keyword}</b></a>"
+        "title": f"Vinted ({domain.upper()}): Najnovšie pre '{keyword}'",
+        "link": url,
+        "price": f"{min_price}€ - {max_price}€",
+        "telegram_text": f"• Vinted ({domain.upper()}): <a href='{url}'>Nové inzeráty pre <b>{keyword}</b> (do {max_price}€)</a>"
     }]
 
 st.divider()
 st.subheader("🚀 Manuálne spustenie")
 
 if st.button("🔍 Sledovať inzeráty hneď"):
-    with st.spinner("Prehľadávam platformy..."):
+    with st.spinner("Prehľadávam platformy (za posledných 24 hodín)..."):
         all_ads = []
         if bazos_sk:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
         if bazos_cz:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
         if vinted_sk:
-            all_ads.extend(search_vinted(keyword, "sk"))
+            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "sk"))
         if vinted_cz:
-            all_ads.extend(search_vinted(keyword, "cz"))
+            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "cz"))
         if vinted_pl:
-            all_ads.extend(search_vinted(keyword, "pl"))
+            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "pl"))
             
         st.session_state["latest_results"] = all_ads
         
         if all_ads and telegram_token and chat_id:
             formatted_lines = [ad["telegram_text"] for ad in all_ads]
-            msg = f"🔍 <b>Nájdené inzeráty ({keyword}):</b>\n\n" + "\n".join(formatted_lines)
+            msg = f"🚨 <b>Nové inzeráty za posledných 24h ({keyword}):</b>\n\n" + "\n".join(formatted_lines)
             send_telegram_alert(telegram_token, chat_id, msg)
-            st.success("Výsledky boli úspešne nájdené a odoslané na Telegram!")
+            st.success("Filtrované inzeráty boli nájdené a odoslané na Telegram!")
+        else:
+            st.info("V zadanom cenovom rozsahu sa za posledných 24 hodín nič nenašlo.")
 
 # 6. Zobrazenie výsledkov
 if "latest_results" in st.session_state:
@@ -206,4 +223,4 @@ if "latest_results" in st.session_state:
         for ad in st.session_state["latest_results"]:
             st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}**")
     else:
-        st.info("Žiadne záznamy sa nenašli.")
+        st.info("Žiadne záznamy.")
