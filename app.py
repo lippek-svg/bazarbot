@@ -32,7 +32,7 @@ if db:
     except Exception:
         pass
 
-# 2. Nastavenie vyhľadávania a cien
+# 2. Nastavenie vyhľadáwania a cien
 st.subheader("🔍 Čo a kde hľadať")
 keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "auto"))
 
@@ -101,25 +101,17 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 4. Opravený skener pre Bazoš s robustným porovnávaním dátumov
+# 4. Skener pre Bazoš (s ošetrením medzier v dátume)
 def parse_bazos_date_flag(date_text):
     current_date_str = datetime.now().strftime("%d.%m.%Y")
     
-    # Vyčistíme text od bielych znakov a skontrolujeme priamu zhodu
-    clean_text = date_text.strip()
-    if current_date_str in clean_text or "dnes" in clean_text.lower():
-        return True
+    # Odstránime všetky medzery z textu (napr. zmení "18.11. 2026" na "18.11.2026")
+    clean_date_text = re.sub(r'\s+', '', date_text)
+    clean_today = re.sub(r'\s+', '', current_date_str)
     
-    # Vyhľadanie akéhokoľvek dátumu vo formáte DD.MM.YYYY v texte pomocou regulárneho výrazu
-    match = re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})', clean_text)
-    if match:
-        day = match.group(1).zfill(2)
-        month = match.group(2).zfill(2)
-        year = match.group(3)
-        found_date = f"{day}.{month}.{year}"
-        if found_date == current_date_str:
-            return True
-            
+    if clean_today in clean_date_text or "dnes" in clean_date_text.lower():
+        return True
+        
     return False
 
 def search_bazos(keyword, min_price, max_price, domain="sk"):
