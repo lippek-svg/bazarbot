@@ -2,7 +2,6 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
-from bs4ational import BeautifulSoup
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 
@@ -98,7 +97,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 5. Skener pre Bazoš s filtrom na 24 hodín a cenu
+# 5. Skener pre Bazoš
 def search_bazos(keyword, min_price, max_price, domain="sk"):
     url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
@@ -115,7 +114,9 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
             for item in items:
                 title_elem = item.select_one(".nadpis a") or item.select_one("h2 a")
                 price_elem = item.select_one(".cena")
-                time_elem = item.select_one(".velikost10") or item.find(string=lambda t: t and ('dnes' in t.lower() || 'včera' in t.lower() || ':' in t))
+                
+                # Opravená syntax pre lambda podmienku (použitie 'or' namiesto '||')
+                time_elem = item.select_one(".velikost10") or item.find(string=lambda t: t and ('dnes' in t.lower() or 'včera' in t.lower() or ':' in t))
                 
                 if title_elem:
                     title = title_elem.get_text(strip=True)
@@ -127,7 +128,6 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                     link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
                     price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
                     
-                    # Kontrola ceny (ak vieme cenu vyparsovať ako číslo)
                     price_val = 0
                     try:
                         import re
@@ -137,7 +137,6 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                     except:
                         pass
                     
-                    # Filtrovanie podľa ceny zadaného rozsahu (ak je cena uvedená)
                     if price_val > 0 and not (min_price <= price_val <= max_price):
                         continue
 
@@ -152,7 +151,6 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                         if len(ads) >= 5:
                             break
                             
-            # Záložný zber, ak by štruktúra .inzeraty zlyhala, ale selektujeme len reálne detailné linky
             if not ads:
                 for a_tag in soup.find_all("a", href=True):
                     href = a_tag["href"]
@@ -179,7 +177,7 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
         st.error(f"Chyba Bazoš: {e}")
         return []
 
-# 5.1 Vinted skener (odkaz na konkrétny katalóg filtrovaný na posledné hodiny / najnovšie)
+# 5.1 Vinted skener
 def search_vinted(keyword, min_price, max_price, domain="sk"):
     url = f"https://www.vinted.{domain}/catalog?search_text={keyword}&price_from={min_price}&price_to={max_price}&order=newest_first"
     return [{
@@ -193,7 +191,7 @@ st.divider()
 st.subheader("🚀 Manuálne spustenie")
 
 if st.button("🔍 Sledovať inzeráty hneď"):
-    with st.spinner("Prehľadávam platformy (za posledných 24 hodín)..."):
+    with st.spinner("Prehľadávam platformy..."):
         all_ads = []
         if bazos_sk:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
@@ -202,7 +200,7 @@ if st.button("🔍 Sledovať inzeráty hneď"):
         if vinted_sk:
             all_ads.extend(search_vinted(keyword, cena_od, cena_do, "sk"))
         if vinted_cz:
-            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "cz"))
+            all_ads.extend(search_vinted(keyword, cena_cz, cena_do, "cz") if 'cena_cz' in locals() else search_vinted(keyword, cena_od, cena_do, "cz"))
         if vinted_pl:
             all_ads.extend(search_vinted(keyword, cena_od, cena_do, "pl"))
             
@@ -210,11 +208,11 @@ if st.button("🔍 Sledovať inzeráty hneď"):
         
         if all_ads and telegram_token and chat_id:
             formatted_lines = [ad["telegram_text"] for ad in all_ads]
-            msg = f"🚨 <b>Nové inzeráty za posledných 24h ({keyword}):</b>\n\n" + "\n".join(formatted_lines)
+            msg = f"🚨 <b>Nové inzeráty ({keyword}):</b>\n\n" + "\n".join(formatted_lines)
             send_telegram_alert(telegram_token, chat_id, msg)
-            st.success("Filtrované inzeráty boli nájdené a odoslané na Telegram!")
+            st.success("Inzeráty boli úspešne nájdené a odoslané na Telegram!")
         else:
-            st.info("V zadanom cenovom rozsahu sa za posledných 24 hodín nič nenašlo.")
+            st.info("V zadanom rozsahu sa nenašli žiadne nové inzeráty.")
 
 # 6. Zobrazenie výsledkov
 if "latest_results" in st.session_state:
