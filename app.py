@@ -32,13 +32,13 @@ if db:
 
 # 2. Nastavenie vyhľadávania a cien
 st.subheader("🔍 Čo a kde hľadať")
-keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "auto"))
+keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "iphone"))
 
 col_p1, col_p2 = st.columns(2)
 with col_p1:
     cena_od = st.number_input("Cena od (€)", min_value=0, value=saved_data.get("cena_od", 0), step=10)
 with col_p2:
-    cena_do = st.number_input("Cena do (€)", min_value=0, value=saved_data.get("cena_do", 10000), step=10)
+    cena_do = st.number_input("Cena do (€)", min_value=0, value=saved_data.get("cena_do", 1000), step=10)
 
 st.write("**Vyber platformy na sledovanie:**")
 col1, col2 = st.columns(2)
@@ -96,9 +96,9 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 5. Opravený skener pre Bazoš (istota záchytu)
-def search_bazos(keyword, domain="sk"):
-    url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}"
+# 5. Presný skener pre Bazoš (filtruje len reálne inzeráty)
+def search_bazos(keyword, min_price, max_price, domain="sk"):
+    url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept-Language": "sk-SK,sk;q=0.9"
@@ -108,38 +108,70 @@ def search_bazos(keyword, domain="sk"):
         ads = []
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
-            # Hľadáme akékoľvek odkazy na detail inzerátu
-            for a_tag in soup.find_all("a", href=True):
-                href = a_tag["href"]
-                if "inzerat" in href:
-                    title = a_tag.get_text(strip=True)
-                    if not title or len(title) < 3:
-                        continue
-                    link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
+            
+            # Hľadáme iba bloky inzerátov, aby sme ignorovali menu a hlavičky
+            items = soup.select(".inzeraty") or soup.select(".inzerat")
+            for item in items:
+                title_elem = item.select_one(".nadpis a") or item.select_one("h2 a")
+                price_elem = item.select_one(".cena")
+                
+                if title_elem:
+                    title = title_elem.get_text(strip=True)
+                    href = title_elem.get("href", "")
                     
-                    item = {
+                    # Bezpečnostná kontrola, či to nie je systémový odkaz
+                    if not href or "prisezn" in href or "hodnotenie" in href or "moje" in href.lower():
+                        continue
+                        
+                    link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
+                    price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
+                    
+                    item_data = {
                         "title": f"Bazoš ({domain.upper()}): {title}",
                         "link": link,
-                        "price": "Pozri detail",
-                        "telegram_text": f"• Bazoš ({domain.upper()}): <a href='{link}'>{title}</a>"
+                        "price": price_text,
+                        "telegram_text": f"• Bazoš ({domain.upper()}): <a href='{link}'>{title}</a> — <b>{price_text}</b>"
                     }
-                    if item not in ads:
-                        ads.append(item)
+                    if item_data not in ads:
+                        ads.append(item_data)
                         if len(ads) >= 5:
                             break
+                            
+            # Záložný filter, ak by triedy nesadli, ale filtrujeme len reálne inzeráty v číselných podcestiach
+            if not ads:
+                for a_tag in soup.find_all("a", href=True):
+                    href = a_tag["href"]
+                    # Na Bazoši detail inzerátu vždy obsahuje číslo rubriky alebo /inzerat/
+                    if "/inzerat/" in href or any(char.isdigit() for char in href.split("/")[-1]):
+                        if any(bad in href.lower() for bad in ["prispievat", "kontakt", "hodnotenie", "moje", "pravidla", "napoveda"]):
+                            continue
+                        title = a_tag.get_text(strip=True)
+                        if not title or len(title) < 5:
+                            continue
+                        link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
+                        
+                        item_data = {
+                            "title": f"Bazoš ({domain.upper()}): {title}",
+                            "link": link,
+                            "price": "Pozri detail",
+                            "telegram_text": f"• Bazoš ({domain.upper()}): <a href='{link}'>{title}</a>"
+                        }
+                        if item_data not in ads:
+                            ads.append(item_data)
+                            if len(ads) >= 5:
+                                break
         return ads
     except Exception as e:
         st.error(f"Chyba Bazoš: {e}")
         return []
 
-# 5.1 Ošetrený Vinted (vyhne sa 404 chybám)
+# 5.1 Vinted katalógový odkaz
 def search_vinted(keyword, domain="sk"):
-    # Vinted momentálne vyžaduje špeciálne hlavičky, kým ho plne prepojíme, vráti stabilnú informáciu
     return [{
         "title": f"Vinted ({domain.upper()}): Vyhľadávanie pre '{keyword}'",
         "link": f"https://www.vinted.{domain}/catalog?search_text={keyword}",
-        "price": "Web",
-        "telegram_text": f"• Vinted ({domain.upper()}): Otvoriť katalóg pre <b>{keyword}</b>"
+        "price": "Katalóg",
+        "telegram_text": f"• Vinted ({domain.upper()}) katalóg: <a href='https://www.vinted.{domain}/catalog?search_text={keyword}'><b>{keyword}</b></a>"
     }]
 
 st.divider()
@@ -149,9 +181,9 @@ if st.button("🔍 Sledovať inzeráty hneď"):
     with st.spinner("Prehľadávam platformy..."):
         all_ads = []
         if bazos_sk:
-            all_ads.extend(search_bazos(keyword, "sk"))
+            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
         if bazos_cz:
-            all_ads.extend(search_bazos(keyword, "cz"))
+            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
         if vinted_sk:
             all_ads.extend(search_vinted(keyword, "sk"))
         if vinted_cz:
