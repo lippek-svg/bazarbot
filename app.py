@@ -103,7 +103,6 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
 
 # 4. Skener pre Bazoš
 def parse_bazos_date_flag(date_text):
-    """Skontroluje či text obsahuje 'Dnes' (alebo alternatívy pre dnešný deň)"""
     if "Dnes" in date_text or "dnes" in date_text.lower():
         return True
     return False
@@ -184,7 +183,6 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
                 created_ts = item.get("created_at_ts")
                 parsed_time = datetime.fromtimestamp(created_ts) if created_ts else datetime.now()
                 
-                # Zistíme či je z dnešného dňa
                 is_today = parsed_time.date() == datetime.now().date()
                 
                 ads.append({
@@ -221,7 +219,6 @@ if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
         if vinted_pl:
             all_ads.extend(search_vinted(keyword, cena_od, cena_do, "pl"))
             
-        # Filtrujeme len tie, ktoré sú označené ako dnešné
         today_ads = [ad for ad in all_ads if ad["is_today"]]
         
         st.success(f"Nájdených **{len(today_ads)}** inzerátov pridaných **dnes**:")
@@ -241,9 +238,8 @@ if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
         else:
             st.warning("Pre zadané kritériá sa dnes nenašli žiadne inzeráty.")
             
-        # Diagnostický box pre kontrolu, či skript vôbec niečo stiahol zo stránok
         with st.expander("🛠️ Zobraziť surový prehľad všetkých stiahnutých inzerátov (Debug)"):
-            st.write(Celkovo stiahnutých položiek zo stránok (všetky dátumy): {len(all_ads)})
+            st.write(f"Celkovo stiahnutých položiek zo stránok (všetky dátumy): {len(all_ads)}")
             for ad in all_ads:
                 st.write(f"- [{ad['platform']}] {ad['title']} | Dátum text: `{ad.get('date_text')}` | Je dnes: **{ad['is_today']}**")
 
@@ -272,7 +268,7 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
             new_ads_found = 0
             for ad in all_ads:
                 if not ad["is_today"]:
-                    continue # Posielame len dnešné
+                    continue
                     
                 if not is_ad_already_sent(ad["id"]):
                     mark_ad_as_sent(ad["id"])
