@@ -90,7 +90,6 @@ def mark_ad_as_sent(ad_id):
         db.collection("sent_ads").document(safe_id).set({"sent_at": firestore.SERVER_TIMESTAMP})
 
 def clean_old_sent_ads():
-    """Automaticky vymaže z Firebase sent_ads záznamy staršie ako 48 hodín."""
     if not db:
         return
     try:
@@ -180,20 +179,28 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
     except Exception as e:
         return []
 
-# 5. Skener pre Vinted (24-hodinové okno cez API timestamp)
+# 5. Vylepšený skener pre Vinted (session + cookies + headers)
 def search_vinted(keyword, min_price, max_price, domain="sk"):
     url = f"https://www.vinted.{domain}/api/v2/catalog/items?search_text={keyword}&price_from={min_price}&price_to={max_price}&per_page=30"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*"
-    }
+    
+    session = requests.Session()
+    # Nastavíme reálne hlavičky prehliadača, aby nás Vinted nevyhodil
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "sk-SK,sk;q=0.9,cs;q=0.8,en-US;q=0.7,en;q=0.6",
+        "Referer": f"https://www.vinted.{domain}/",
+        "X-Requested-With": "XMLHttpRequest"
+    })
+    
     try:
-        session = requests.Session()
-        session.headers.update(headers)
-        session.get(f"https://www.vinted.{domain}", timeout=5)
+        # Krok 1: Najprv načítame hlavnú stránku, aby session získala platné cookies
+        session.get(f"https://www.vinted.{domain}", timeout=8)
         
+        # Krok 2: Dopyt na API s rovnakou session
         response = session.get(url, timeout=10)
         ads = []
+        
         if response.status_code == 200:
             data = response.json()
             items = data.get("items", [])
@@ -209,7 +216,6 @@ def search_vinted(keyword, min_price, max_price, domain="sk"):
                 created_ts = item.get("created_at_ts")
                 parsed_time = datetime.fromtimestamp(created_ts) if created_ts else datetime.now()
                 
-                # Vinted presné 24-hodinové okno
                 limit_24h = datetime.now() - timedelta(hours=24)
                 is_valid_time = parsed_time >= limit_24h
                 
