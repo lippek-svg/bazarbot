@@ -127,4 +127,96 @@ def parse_bazos_date(date_text):
 def search_bazos(keyword, min_price, max_price, domain="sk"):
     url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "sk-SK,sk;q=0.9"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        ads = []
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            items = soup.select(".inzeraty") or soup.select(".inzerat")
+            
+            for item in items:
+                title_elem = item.select_one(".nadpis a") or item.select_one("h2 a")
+                price_elem = item.select_one(".cena")
+                date_elem = item.select_one(".velikost10")
+                
+                if title_elem:
+                    title = title_elem.get_text(strip=True)
+                    href = title_elem.get("href", "")
+                    
+                    if not href or any(bad in href.lower() for bad in ["prispievat", "kontakt", "hodnotenie", "moje"]):
+                        continue
+                        
+                    link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
+                    
+                    parts = href.strip("/").split("/")
+                    ad_id = f"bazos_{domain}_" + (parts[-1] if parts and parts[-1].isdigit() else href)
+                    
+                    price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
+                    date_text = date_elem.get_text(strip=True) if date_elem else ""
+                    parsed_time = parse_bazos_date(date_text)
+                    
+                    ads.append({
+                        "id": ad_id,
+                        "title": title,
+                        "link": link,
+                        "price": price_text,
+                        "time": parsed_time,
+                        "platform": f"Bazoš ({domain.upper()})"
+                    })
+        return ads
+    except Exception as e:
+        st.error(f"Chyba Bazoš: {e}")
+        return []
+
+st.divider()
+
+# 5. TESTOVACIE ROZHRANIE (Slider pre časové okno)
+st.subheader("🧪 Testovacie rozhranie (Filtrovanie podľa času)")
+test_hours = st.slider("Zvoľ časové okno (inzeráty za posledných X hodín)", min_value=1, max_value=24, value=5)
+
+if st.button("🧪 Spustiť testovací filter"):
+    with st.spinner("Sťahujem inzeráty na test..."):
+        all_ads = []
+        if bazos_sk:
+            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
+        if bazos_cz:
+            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+            
+        limit_time = datetime.now() - timedelta(hours=test_hours)
+        filtered_ads = [ad for ad in all_ads if ad["time"] >= limit_time]
+        
+        st.success(f"Nájdených {len(filtered_ads)} inzerátov za posledných {test_hours} hodín:")
+        for ad in filtered_ads:
+            st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['time'].strftime('%d.%m. %H:%M')}*)")
+
+st.divider()
+
+# 6. Ostré spustenie (Telegram notifikácie)
+st.subheader("🚀 Ostré spustenie (Telegram notifikácie)")
+
+if st.button("🔍 Skontrolovať a poslať na Telegram"):
+    if not telegram_token or not chat_id:
+        st.warning("Najprv vyplň Telegram Token a Chat ID.")
+    else:
+        with st.spinner("Hľadám nové inzeráty..."):
+            all_ads = []
+            if bazos_sk:
+                all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
+            if bazos_cz:
+                all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+            
+            new_ads_found = 0
+            for ad in all_ads:
+                if not is_ad_already_sent(ad["id"]):
+                    mark_ad_as_sent(ad["id"])
+                    msg = f"🚨 <b>Nový inzerát ({ad['platform']}):</b>\n\n• <a href='{ad['link']}'><b>{ad['title']}</b></a>\n💰 Cena: <b>{ad['price']}</b>"
+                    send_telegram_alert(telegram_token, chat_id, msg)
+                    new_ads_found += 1
+            
+            if new_ads_found > 0:
+                st.success(f"Odoslaných {new_ads_found} nových inzerátov na Telegram!")
+            else:
+                st.info("Žiadne nové inzeráty na odoslanie.")
