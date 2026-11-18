@@ -113,9 +113,9 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         if not res.get("ok"):
             st.error("Chyba pri odosielaní Telegram správy. Skontroluj Token a Chat ID.")
 
-# 5. Skener inzerátov pre Bazoš.sk / Bazoš.cz
+# 5. Stabilný skener pre Bazoš
 def search_bazos(keyword, min_price, max_price, domain="sk"):
-    url = f"https://bazos.{domain}/vyhladavanie.php?hledat={keyword}&rubriky=bazos_{domain}&hlokalita=&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
+    url = f"https://bazos.{domain}/vyhladavanie.php?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
@@ -124,10 +124,11 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
     ads = []
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, "html.parser")
-        items = soup.select(".inzeraty") or soup.select("div.inzerat") or soup.select(".inzeratzobrazenie")
+        # Bazoš obaľuje inzeráty do triedy .inzeraty
+        items = soup.select(".inzeraty")
         
         for item in items:
-            title_elem = item.select_one(".nadpis a") or item.select_one("h2 a")
+            title_elem = item.select_one(".nadpis a")
             price_elem = item.select_one(".cena")
             
             if title_elem:
@@ -138,8 +139,8 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                 
                 price_text = price_elem.text.strip() if price_elem else "Cena neuvedená"
                 
-                ads.append(f"• <a href='{link}'>{title}</a> ({price_text})")
-                if len(ads) >= 5:
+                ads.append(f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>")
+                if len(ads) >= 5: # Vráti prvých 5 nájdených
                     break
     return ads
 
