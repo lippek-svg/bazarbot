@@ -3,32 +3,32 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
 
-# 1. Inicializácia Firebase priamo zo Streamlit Secrets
+# 1. Bezpečná inicializácia Firebase
 if not firebase_admin._apps:
     try:
-        # Načítanie sekcie firebase zo st.secrets a konverzia na obyčajný slovník
         firebase_secrets = dict(st.secrets["firebase"])
-        
-        # Oprava formátovania privátneho kľúča (aby prežil newline znaky z TOML)
         if "private_key" in firebase_secrets:
             firebase_secrets["private_key"] = firebase_secrets["private_key"].replace("\\n", "\n")
             
         cred = credentials.Certificate(firebase_secrets)
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"Chyba pripojenia k Firebase: {e}")
+        st.error(f"Chyba pri inicializácii Firebase: {e}")
 
-db = firestore.client()
+# Získanie klienta len ak je Firebase inicializovaný
+db = None
+if firebase_admin._apps:
+    db = firestore.client()
 
 st.title("🛒 BazarBOT - Multi-platformový sledovač")
 
-# Načítanie existujúcich nastavení z Firebase (ak už existujú)
-doc_ref = db.collection("settings").document("user_config")
 saved_data = {}
-try:
-    saved_data = doc_ref.get().to_dict() or {}
-except Exception:
-    pass
+if db:
+    try:
+        doc_ref = db.collection("settings").document("user_config")
+        saved_data = doc_ref.get().to_dict() or {}
+    except Exception:
+        pass
 
 # 2. Nastavenie vyhľadávania
 st.subheader("🔍 Čo a kde hľadať")
@@ -44,10 +44,9 @@ with col1:
 
 with col2:
     vinted_sk = st.checkbox("Vinted.sk", value=saved_data.get("vinted_sk", False))
-    vinted_cz = st.checkbox("Vinted.cz", value=saved_data.get(visual := "vinted_cz", False))
+    vinted_cz = st.checkbox("Vinted.cz", value=saved_data.get("vinted_cz", False))
     vinted_pl = st.checkbox("Vinted.pl", value=saved_data.get("vinted_pl", False))
 
-# Podmienené zobrazenie okruhu v km pre Facebook Marketplace
 fb_radius = 20
 if fb_market:
     fb_radius = st.slider("Okruh hľadania pre Facebook Marketplace (v km)", min_value=5, max_value=200, value=saved_data.get("fb_radius", 20), step=5)
@@ -66,20 +65,23 @@ def send_telegram_alert(token, chat_id, message):
 
 # 4. Uloženie do Firebase
 if st.button("💾 Uložiť nastavenia", type="primary"):
-    config_data = {
-        "keyword": keyword,
-        "bazos_sk": bazos_sk,
-        "bazos_cz": bazos_cz,
-        "vinted_sk": vinted_sk,
-        "vinted_cz": vinted_cz,
-        "vinted_pl": vinted_pl,
-        "fb_market": fb_market,
-        "fb_radius": fb_radius if fb_market else None,
-        "telegram_token": telegram_token,
-        "chat_id": chat_id
-    }
-    doc_ref.set(config_data)
-    st.success("Nastavenia boli uložené do Firebase databázy!")
+    if db:
+        config_data = {
+            "keyword": keyword,
+            "bazos_sk": bazos_sk,
+            "bazos_cz": bazos_cz,
+            "vinted_sk": vinted_sk,
+            "vinted_cz": vinted_cz,
+            "vinted_pl": vinted_pl,
+            "fb_market": fb_market,
+            "fb_radius": fb_radius if fb_market else None,
+            "telegram_token": telegram_token,
+            "chat_id": chat_id
+        }
+        db.collection("settings").document("user_config").set(config_data)
+        st.success("Nastavenia boli uložené do Firebase databázy!")
+    else:
+        st.error("Databáza nie je pripojená, nastavenia sa neuložili.")
 
     if telegram_token and chat_id:
         active_platforms = [name for name, active in [
