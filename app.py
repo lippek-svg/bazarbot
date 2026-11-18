@@ -110,9 +110,8 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
         response = requests.get(url, headers=headers, timeout=10)
         st.write(f"🛠 **[Debug {domain.upper()}]** HTTP Status: `{response.status_code}` | Dĺžka HTML: `{len(response.text)} znakov`")
         
-        # Ak je odpoveď podozrivo krátka alebo blokovaná, ukážeme HTML
         if response.status_code != 200 or len(response.text) < 1000:
-            st.warning(Server zrejme blokuje požiadavku alebo vracia anomáliu.")
+            st.warning("Server zrejme blokuje požiadavku alebo vracia anomáliu.")
             st.code(response.text[:500])
             
         ads = []
