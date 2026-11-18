@@ -98,57 +98,55 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         }
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené do Firebase databázy!")
-    else:
-        st.error("Databáza nie je pripojená, nastavenia sa neuložili.")
 
-    if telegram_token and chat_id:
-        active_platforms = [name for name, active in [
-            ("Bazoš.sk", bazos_sk), ("Bazoš.cz", bazos_cz),
-            ("Vinted.sk", vinted_sk), ("Vinted.cz", vinted_cz), ("Vinted.pl", vinted_pl),
-            (f"FB Marketplace ({fb_radius} km)", fb_market)
-        ] if active]
-        
-        msg = f"✅ <b>Nastavenia aktualizované</b>\n🔍 Hľadám: <code>{keyword}</code> ({cena_od}€ - {cena_do}€)\n⏱ Frekvencia: {frequency} min\n🌐 Platformy: {', '.join(active_platforms)}"
-        send_telegram_alert(telegram_token, chat_id, msg)
-
-# 5. Opravený stabilný skener pre Bazoš
+# 5. Skener s diagnostikou blokovania
 def search_bazos(keyword, min_price, max_price, domain="sk"):
-    # URL presne zodpovedajúca vyhľadávaciemu formuláru na Bazoši
-    url = f"https://bazos.{domain}/vyhladavanie.php?hledat={keyword}&rubriky=bazos_{domain}&hlokalita=&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
+    url = f"https://bazos.{domain}/vyhladavanie.php?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
-    response = requests.get(url, headers=headers)
     
-    ads = []
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, "html.parser")
-        items = soup.select(".inzeraty")
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        st.write(f"🛠 **[Debug {domain.upper()}]** HTTP Status: `{response.status_code}` | Dĺžka HTML: `{len(response.text)} znakov`")
         
-        for item in items:
-            title_elem = item.select_one(".nadpis a")
-            price_elem = item.select_one(".cena")
+        # Ak je odpoveď podozrivo krátka alebo blokovaná, ukážeme HTML
+        if response.status_code != 200 or len(response.text) < 1000:
+            st.warning(Server zrejme blokuje požiadavku alebo vracia anomáliu.")
+            st.code(response.text[:500])
             
-            if title_elem:
-                title = title_elem.text.strip()
-                link = title_elem.get("href", "")
-                if link and not link.startswith("http"):
-                    link = f"https://bazos.{domain}" + link
+        ads = []
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            items = soup.select(".inzeraty")
+            
+            for item in items:
+                title_elem = item.select_one(".nadpis a")
+                price_elem = item.select_one(".cena")
                 
-                price_text = price_elem.text.strip() if price_elem else "Cena neuvedená"
-                
-                ads.append({
-                    "title": title,
-                    "link": link,
-                    "price": price_text,
-                    "text": f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>"
-                })
-                if len(ads) >= 5:
-                    break
-    return ads
+                if title_elem:
+                    title = title_elem.text.strip()
+                    link = title_elem.get("href", "")
+                    if link and not link.startswith("http"):
+                        link = f"https://bazos.{domain}" + link
+                    
+                    price_text = price_elem.text.strip() if price_elem else "Cena neuvedená"
+                    
+                    ads.append({
+                        "title": title,
+                        "link": link,
+                        "price": price_text,
+                        "text": f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>"
+                    })
+                    if len(ads) >= 5:
+                        break
+        return ads
+    except Exception as e:
+        st.error(f"Chyba pripojenia k Bazošovi ({domain}): {e}")
+        return []
 
 st.divider()
-st.subheader("🚀 Manuálne spustenie a náhľad")
+st.subheader("🚀 Manuálne spustenie a diagnostika")
 
 if st.button("🔍 Sledovať inzeráty hneď"):
     with st.spinner("Prehľadávam bazáre..."):
@@ -158,28 +156,22 @@ if st.button("🔍 Sledovať inzeráty hneď"):
         if bazos_cz:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
             
+        st.session_state["latest_results"] = all_ads
+        
         if all_ads:
-            # Uloženie do session_state, aby sa to zobrazilo dole na stránke
-            st.session_state["latest_results"] = all_ads
-            
-            # Sformátovanie správy pre Telegram aj náhľad
             formatted_lines = [ad["text"] for ad in all_ads]
             msg = f"🔍 <b>Nájdené inzeráty ({cena_od}€ - {cena_do}€):</b>\n\n" + "\n".join(formatted_lines)
-            
             if telegram_token and chat_id:
                 send_telegram_alert(telegram_token, chat_id, msg)
-                st.success("Hľadanie dokončené, výsledky odoslané na Telegram aj zobrazené nižšie!")
-            else:
-                st.warning("Výsledky sú nájdené, ale nie je vyplnený Telegram Token/Chat ID (správa nebola odoslaná na Telegram).")
+                st.success("Odoslané na Telegram aj zobrazené nižšie!")
         else:
-            st.session_state["latest_results"] = []
-            st.info("Žiadne inzeráty v danom cenovom rozsahu sa nenašli.")
+            st.info("Žiadne inzeráty sa nenašli (skontroluj debug hlásenia vyššie).")
 
-# 6. Zobrazenie výstupu priamo na spodku stránky
+# 6. Zobrazenie výsledkov
 if "latest_results" in st.session_state:
-    st.markdown("### 📋 Posledné nájdené výsledky (Náhľad správy):")
+    st.markdown("### 📋 Výsledky skenovania:")
     if st.session_state["latest_results"]:
         for ad in st.session_state["latest_results"]:
             st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}**")
     else:
-        st.write("Žiadne záznamy na zobrazenie.")
+        st.write("Žiadne záznamy.")
