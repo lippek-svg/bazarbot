@@ -76,9 +76,13 @@ chat_id = st.text_input("Telegram Chat ID", value=saved_data.get("chat_id", ""))
 def send_telegram_alert(token, chat_id, message):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
-    return requests.post(url, json=payload).json()
+    try:
+        res = requests.post(url, json=payload).json()
+        return res
+    except Exception as e:
+        return {"ok": False, "description": str(e)}
 
-# 4. Uloženie do Firebase
+# 4. Uloženie do Firebase a overenie Telegramu
 if st.button("💾 Uložiť nastavenia", type="primary"):
     if db:
         config_data = {
@@ -98,8 +102,26 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         }
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené do Firebase databázy!")
+    else:
+        st.error("Databáza nie je pripojená, nastavenia sa neuložili.")
 
-# 5. Robustný skener s flexibilným vyhľadávaním položiek v HTML
+    if telegram_token and chat_id:
+        active_platforms = [name for name, active in [
+            ("Bazoš.sk", bazos_sk), ("Bazoš.cz", bazos_cz),
+            ("Vinted.sk", vinted_sk), ("Vinted.cz", vinted_cz), ("Vinted.pl", vinted_pl),
+            (f"FB Marketplace ({fb_radius} km)", fb_market)
+        ] if active]
+        
+        msg = f"✅ <b>BazarBOT: Nastavenia aktualizované</b>\n🔍 Hľadám: <code>{keyword}</code> ({cena_od}€ - {cena_do}€)\n⏱ Frekvencia: {frequency} min\n🌐 Platformy: {', '.join(active_platforms)}"
+        res = send_telegram_alert(telegram_token, chat_id, msg)
+        if res.get("ok"):
+            st.success("Notifikačná správa bola úspešne odoslaná na Telegram!")
+        else:
+            st.error(f"Chyba Telegram API: {res.get('description', 'Neznáma chyba')}")
+    else:
+        st.warning("Zadaj Telegram Token a Chat ID pre posielanie notifikácií.")
+
+# 5. Skener pre Bazoš
 def search_bazos(keyword, min_price, max_price, domain="sk"):
     url = f"https://bazos.{domain}/?hledat={keyword}&rubriky=bazos_{domain}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     
@@ -110,65 +132,75 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
     
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        st.write(f"🛠 **[Debug {domain.upper()}]** HTTP Status: `{response.status_code}` | Dĺžka HTML: `{len(response.text)} znakov`")
-        
         ads = []
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
+            all_links = soup.find_all("a", href=True)
+            seen_links = set()
             
-            # Flexibilnejšie vyhľadávanie inzerátov v HTML štruktúre Bazoša
-            items = soup.select(".inzeraty") or soup.select(".inzerat") or soup.select("div[class*='inzerat']")
-            
-            for item in items:
-                title_elem = item.select_one(".nadpis a") or item.select_one("h2 a") or item.select_one("a")
-                price_elem = item.select_one(".cena") or item.select_one("div[class*='cena']")
-                
-                if title_elem:
-                    title = title_elem.text.strip()
-                    link = title_elem.get("href", "")
-                    if link and not link.startswith("http"):
-                        link = f"https://bazos.{domain}" + link
+            for link_elem in all_links:
+                href = link_elem.get("href", "")
+                if "/inzerat/" in href and href not in seen_links:
+                    seen_links.add(href)
                     
-                    price_text = price_elem.text.strip() if price_elem else "Cena neuvedená"
+                    title = link_elem.text.strip()
+                    if not title or len(title) < 3:
+                        continue
+                        
+                    if not href.startswith("http"):
+                        link = f"https://bazos.{domain}" + href
+                    else:
+                        link = href
+                        
+                    parent = link_elem.find_parent("div") or link_elem.find_parent("table")
+                    price_text = "Cena neuvedená"
+                    if parent:
+                        price_elem = parent.select_one(".cena") or parent.find(string=lambda t: t and '€' in t)
+                        if price_elem:
+                            price_text = price_elem.text.strip() if hasattr(price_elem, 'text') else str(price_elem).strip()
                     
-                    # Filtrujeme len relevantné odkazy, ktoré vyzerajú ako inzeráty
-                    if title and link and "/inzerat/" in link:
-                        ads.append({
-                            "title": title,
-                            "link": link,
-                            "price": price_text,
-                            "text": f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>"
-                        })
-                        if len(ads) >= 5:
-                            break
+                    ads.append({
+                        "title": title,
+                        "link": link,
+                        "price": price_text,
+                        "text": f"• <a href='{link}'>{title}</a> — <b>{price_text}</b>"
+                    })
+                    
+                    if len(ads) >= 5:
+                        break
         return ads
     except Exception as e:
         st.error(f"Chyba pripojenia k Bazošovi ({domain}): {e}")
         return []
 
 st.divider()
-st.subheader("🚀 Manuálne spustenie a diagnostika")
+st.subheader("🚀 Manuálne spustenie")
 
 if st.button("🔍 Sledovať inzeráty hneď"):
-    with st.spinner("Prehľadávam bazáre..."):
-        all_ads = []
-        if bazos_sk:
-            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
-        if bazos_cz:
-            all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+    if not telegram_token or not chat_id:
+        st.warning("Najprv vyplň Telegram Token a Chat ID v sekcii vyššie.")
+    else:
+        with st.spinner("Prehľadávam bazáre..."):
+            all_ads = []
+            if bazos_sk:
+                all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
+            if bazos_cz:
+                all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+                
+            st.session_state["latest_results"] = all_ads
             
-        st.session_state["latest_results"] = all_ads
-        
-        if all_ads:
-            formatted_lines = [ad["text"] for ad in all_ads]
-            msg = f"🔍 <b>Nájdené inzeráty ({cena_od}€ - {cena_do}€):</b>\n\n" + "\n".join(formatted_lines)
-            if telegram_token and chat_id:
-                send_telegram_alert(telegram_token, chat_id, msg)
-                st.success("Odoslané na Telegram aj zobrazené nižšie!")
-        else:
-            st.info("Žiadne inzeráty sa nenašli (skontroluj debug hlásenia vyššie).")
+            if all_ads:
+                formatted_lines = [ad["text"] for ad in all_ads]
+                msg = f"🔍 <b>Nájdené inzeráty ({cena_od}€ - {cena_do}€):</b>\n\n" + "\n".join(formatted_lines)
+                res = send_telegram_alert(telegram_token, chat_id, msg)
+                if res.get("ok"):
+                    st.success("Hľadanie dokončené, výsledky úspešne odoslané na Telegram aj zobrazené nižšie!")
+                else:
+                    st.error(f"Nepodarilo sa odoslať Telegram správu: {res.get('description')}")
+            else:
+                st.info("Žiadne inzeráty v danom cenovom rozsahu sa nenašli.")
 
-# 6. Zobrazenie výsledkov
+# 6. Zobrazenie výsledkov na stránke
 if "latest_results" in st.session_state:
     st.markdown("### 📋 Výsledky skenovania:")
     if st.session_state["latest_results"]:
