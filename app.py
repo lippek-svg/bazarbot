@@ -101,7 +101,7 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
         db.collection("settings").document("user_config").set(config_data)
         st.success("Nastavenia boli uložené!")
 
-# 4. Skener pre Bazoš (čisté hľadanie: kľúčové slovo + cena, bez kategórií)
+# 4. Skener pre Bazoš
 def parse_bazos_date(date_text):
     now = datetime.now()
     try:
@@ -125,7 +125,6 @@ def parse_bazos_date(date_text):
     return now
 
 def search_bazos(keyword, min_price, max_price, domain="sk"):
-    # Čisté globálne vyhľadávanie Bazoša bez obmedzenia rubrík/kategórií
     url = f"https://bazos.{domain}/search.php?hledat={keyword}&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -151,12 +150,11 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                         continue
                         
                     link = f"https://bazos.{domain}" + href if not href.startswith("http") else href
-                    
                     parts = href.strip("/").split("/")
                     ad_id = f"bazos_{domain}_" + (parts[-1] if parts and parts[-1].isdigit() else href)
                     
                     price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
-                    date_text = date_elem.get_text(strip=True) if date_elem else ""
+                    date_text = date_elem.get_text(strip=True) if date_text else ""
                     parsed_time = parse_bazos_date(date_text)
                     
                     ads.append({
@@ -169,36 +167,93 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
                     })
         return ads
     except Exception as e:
-        st.error(f"Chyba Bazoš: {e}")
+        return []
+
+# 5. Skener pre Vinted (cez API)
+def search_vinted(keyword, min_price, max_price, domain="sk"):
+    url = f"https://www.vinted.{domain}/api/v2/catalog/items?search_text={keyword}&price_from={min_price}&price_to={max_price}&per_page=20"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*"
+    }
+    try:
+        session = requests.Session()
+        session.headers.update(headers)
+        session.get(f"https://www.vinted.{domain}", timeout=5) # Získanie session cookies
+        
+        response = session.get(url, timeout=10)
+        ads = []
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("items", [])
+            for item in items:
+                item_id = item.get("id")
+                title = item.get("title", "Bez názvu")
+                url_path = item.get("url", "")
+                link = f"https://www.vinted.{domain}{url_path}" if url_path else f"https://www.vinted.{domain}"
+                
+                price_struct = item.get("price", {})
+                price_text = f"{price_struct.get('amount', '')} {price_struct.get('currency_code', 'EUR')}"
+                
+                created_ts = item.get("created_at_ts")
+                parsed_time = datetime.fromtimestamp(created_ts) if created_ts else datetime.now()
+                
+                ads.append({
+                    "id": f"vinted_{domain}_{item_id}",
+                    "title": title,
+                    "link": link,
+                    "price": price_text,
+                    "time": parsed_time,
+                    "platform": f"Vinted ({domain.upper()})"
+                })
+        return ads
+    except Exception as e:
         return []
 
 st.divider()
 
-# 5. TESTOVACIE ROZHRANIE (Slider pre časové okno)
-st.subheader("🧪 Testovacie rozhranie (Filtrovanie podľa času)")
+# 6. TESTOVACIE ROZHRANIE (Rozdelené do kategórií podľa platforiem)
+st.subheader("🧪 Testovacie rozhranie (Filtrovanie podľa času a kategórií)")
 test_hours = st.slider("Zvoľ časové okno (inzeráty za posledných X hodín)", min_value=1, max_value=48, value=24)
 
 if st.button("🧪 Spustiť testovací filter"):
-    with st.spinner("Sťahujem inzeráty na test..."):
+    with st.spinner("Sťahujem inzeráty zo všetkých zvolených portálov..."):
         all_ads = []
         if bazos_sk:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
         if bazos_cz:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+        if vinted_sk:
+            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "sk"))
+        if vinted_cz:
+            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "cz"))
+        if vinted_pl:
+            all_ads.extend(search_vinted(keyword, cena_od, cena_do, "pl"))
             
         limit_time = datetime.now() - timedelta(hours=test_hours)
         filtered_ads = [ad for ad in all_ads if ad["time"] >= limit_time]
         
-        st.success(f"Nájdených {len(filtered_ads)} inzerátov za posledných {test_hours} hodín:")
+        st.success(f"Celkovo nájdených {len(filtered_ads)} inzerátov za posledných {test_hours} hodín:")
+        
         if filtered_ads:
+            # Rozdelenie do kategórií podľa platformy
+            platforms_groups = {}
             for ad in filtered_ads:
-                st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['time'].strftime('%d.%m. %H:%M')}*)")
+                p = ad["platform"]
+                if p not in platforms_groups:
+                    platforms_groups[p] = []
+                platforms_groups[p].append(ad)
+                
+            for platform_name, p_ads in platforms_groups.items():
+                st.markdown(f"### 📌 {platform_name} ({len(p_ads)} inzerátov)")
+                for ad in p_ads:
+                    st.markdown(f"- [{ad['title']}]({ad['link']}) — **{ad['price']}** (*{ad['time'].strftime('%d.%m. %H:%M')}*)")
         else:
-            st.warning("Žiadne inzeráty nevyhoveli filtrom pre zadané kľúčové slovo a cenu.")
+            st.warning("Žiadne inzeráty nevyhoveli filtrom.")
 
 st.divider()
 
-# 6. Ostré spustenie (Telegram notifikácie)
+# 7. Ostré spustenie (Telegram notifikácie)
 st.subheader("🚀 Ostré spustenie (Telegram notifikácie)")
 
 if st.button("🔍 Skontrolovať a poslať na Telegram"):
@@ -211,6 +266,12 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
                 all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
             if bazos_cz:
                 all_ads.extend(search_bazos(keyword, cena_od, cena_do, "cz"))
+            if vinted_sk:
+                all_ads.extend(search_vinted(keyword, cena_od, cena_do, "sk"))
+            if vinted_cz:
+                all_ads.extend(search_vinted(keyword, cena_od, cena_do, "cz"))
+            if vinted_pl:
+                all_ads.extend(search_vinted(keyword, cena_od, cena_do, "pl"))
             
             new_ads_found = 0
             for ad in all_ads:
@@ -227,7 +288,7 @@ if st.button("🔍 Skontrolovať a poslať na Telegram"):
 
 st.divider()
 
-# 7. DIAGNOSTIKA / OVEROVACIA FUNKCIA KOMUNIKÁCIE S PORTÁLMI
+# 8. DIAGNOSTIKA / OVEROVACIA FUNKCIA KOMUNIKÁCIE S PORTÁLMI
 st.subheader("🛡️ Diagnostika pripojenia k portálom")
 st.write("Over, či portály odpovedajú a či tvoja IP adresa/server nie je blokovaná.")
 
