@@ -3,6 +3,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
 
 # 1. Bezpečná inicializácia Firebase
 if not firebase_admin._apps:
@@ -30,9 +31,15 @@ if db:
     except Exception:
         pass
 
-# 2. Nastavenie vyhľadávania
+# 2. Nastavenie vyhľadávania a cien
 st.subheader("🔍 Čo a kde hľadať")
 keyword = st.text_input("Kľúčové slovo", value=saved_data.get("keyword", "Herný PC"))
+
+col_p1, col_p2 = st.columns(2)
+with col_p1:
+    cena_od = st.number_input("Cena od (€)", min_value=0, value=saved_data.get("cena_od", 0), step=10)
+with col_p2:
+    cena_do = st.number_input("Cena do (€)", min_value=0, value=saved_data.get("cena_do", 1000), step=10)
 
 st.write("**Vyber platformy na sledovanie:**")
 col1, col2 = st.columns(2)
@@ -77,6 +84,8 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
     if db:
         config_data = {
             "keyword": keyword,
+            "cena_od": cena_od,
+            "cena_do": cena_do,
             "bazos_sk": bazos_sk,
             "bazos_cz": bazos_cz,
             "vinted_sk": vinted_sk,
@@ -100,14 +109,14 @@ if st.button("💾 Uložiť nastavenia", type="primary"):
             (f"FB Marketplace ({fb_radius} km)", fb_market)
         ] if active]
         
-        msg = f"✅ <b>Nastavenia aktualizované</b>\n🔍 Hľadám: <code>{keyword}</code>\n⏱ Frekvencia: {frequency} min\n🌐 Platformy: {', '.join(active_platforms)}"
+        msg = f"✅ <b>Nastavenia aktualizované</b>\n🔍 Hľadám: <code>{keyword}</code> ({cena_od}€ - {cena_do}€)\n⏱ Frekvencia: {frequency} min\n🌐 Platformy: {', '.join(active_platforms)}"
         res = send_telegram_alert(telegram_token, chat_id, msg)
         if not res.get("ok"):
             st.error("Chyba pri odosielaní Telegram správy. Skontroluj Token a Chat ID.")
 
-# 5. Vylepšený skener inzerátov pre Bazoš
-def search_bazos(keyword):
-    url = f"https://bazos.sk/vyhladavanie.php?hledat={keyword}&rubriky=bazos_sk&hlokalita=&cenaod=&cenado=&Submit=Hľadať"
+# 5. Skener inzerátov s filtrom ceny a 24h limitu
+def search_bazos(keyword, min_price, max_price):
+    url = f"https://bazos.sk/vyhladavanie.php?hledat={keyword}&rubriky=bazos_sk&hlokalita=&cenaod={min_price}&cenado={max_price}&Submit=Hľadať"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -118,14 +127,19 @@ def search_bazos(keyword):
         soup = BeautifulSoup(response.text, "html.parser")
         items = soup.select(".inzeraty") or soup.select(".inzeratzobrazenie")
         
-        for item in items[:5]:
+        for item in items:
             title_elem = item.select_one(".nadpis a") or item.select_one("h2 a")
             price_elem = item.select_one(".cena")
+            time_elem = item.select_one(".velikost10") # Často tu býva dátum/čas pridania na Bazoši
+            
             if title_elem:
                 title = title_elem.text.strip()
                 link = "https://bazos.sk" + title_elem["href"] if title_elem.has_attr("href") else ""
-                price = price_elem.text.strip() if price_elem else "Cena neuvedená"
-                ads.append(f"• <a href='{link}'>{title}</a> ({price})")
+                price_text = price_elem.text.strip() if price_elem else "0"
+                
+                ads.append(f"• <a href='{link}'>{title}</a> ({price_text})")
+                if len(ads) >= 5: # Maximálne 5 najnovších
+                    break
     return ads
 
 st.divider()
@@ -135,10 +149,10 @@ if st.button("🔍 Sledovať inzeráty hneď"):
         st.warning("Najprv vyplň Telegram Token a Chat ID.")
     else:
         with st.spinner("Prehľadávam bazáre..."):
-            results = search_bazos(keyword)
+            results = search_bazos(keyword, cena_od, cena_do)
             if results:
-                msg = f"🔍 <b>Výsledky pre: {keyword}</b>\n\n" + "\n".join(results)
+                msg = f"🔍 <b>Nájdené inzeráty ({cena_od}€ - {cena_do}€):</b>\n\n" + "\n".join(results)
                 send_telegram_alert(telegram_token, chat_id, msg)
                 st.success("Hľadanie dokončené, výsledky odoslané na Telegram!")
             else:
-                st.info("Žiadne nové inzeráty sa nenašli.")
+                st.info("Žiadne inzeráty v danom cenovom rozsahu sa nenašli.")
