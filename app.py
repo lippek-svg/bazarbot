@@ -177,53 +177,48 @@ def search_bazos(keyword, min_price, max_price, domain="sk"):
     except Exception as e:
         return []
 
-# 5. Skener pre Bazar.sk
+# 5. Nová vylepšená logika pre Bazar.sk
 def search_bazar_sk(keyword, min_price, max_price):
-    url = f"https://www.bazar.sk/inzeraty/{keyword}/?price_from={min_price}&price_to={max_price}"
+    # Upravená URL s query parametrom pre hľadanie
+    url = f"https://www.bazar.sk/vyhladavanie/?q={keyword}&price_from={min_price}&price_to={max_price}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "sk-SK,sk;q=0.9"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept-Language": "sk-SK,sk;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
         ads = []
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
-            # Selektor pre karty inzerátov na Bazar.sk
-            items = soup.select(".card-content") or soup.select(".list-item")
+            
+            # Širší výber selektorov pre inzeráty na Bazar.sk
+            items = soup.select("article") or soup.select(".card") or soup.select(".item") or soup.select("[class*='item']")
             
             for item in items:
-                title_elem = item.select_one("a.title") or item.select_one("h2 a")
-                price_elem = item.select_one(".price")
-                date_elem = item.select_one(".date") # Prípadný element s dátumom
+                title_elem = item.select_one("h2 a") or item.select_one("a.title") or item.select_one("a[href*='detail']")
+                price_elem = item.select_one(".price") or item.select_one("[class*='price']")
                 
                 if title_elem:
                     title = title_elem.get_text(strip=True)
                     href = title_elem.get("href", "")
                     
-                    if not href:
+                    if not href or "vyhladavanie" in href:
                         continue
                         
                     link = "https://www.bazar.sk" + href if not href.startswith("http") else href
-                    # Vytiahneme ID z URL (zvyčajne posledné číselné ID v ceste)
                     parts = [p for p in href.strip("/").split("/") if p]
                     ad_id = "bazar_sk_" + (parts[-1] if parts else href)
                     
                     price_text = price_elem.get_text(strip=True) if price_elem else "Cena neuvedená"
-                    date_text = date_elem.get_text(strip=True) if date_elem else "Dnes"
                     
-                    # Pre Bazar.sk predpokladáme čerstvosť, prípadne overíme text
-                    is_valid_time = True 
-                    if date_text and ("včera" in date_text.lower() or "dní" in date_text.lower()):
-                        is_valid_time = False
-
                     ads.append({
                         "id": ad_id,
                         "title": title,
                         "link": link,
                         "price": price_text,
-                        "is_valid_time": is_valid_time,
-                        "date_text": date_text,
+                        "is_valid_time": True, # Pre Bazar.sk berieme aktuálne výsledky z vyhľadávania
+                        "date_text": "Dnes / Aktuálne",
                         "platform": "Bazar.sk"
                     })
         return ads
@@ -233,11 +228,11 @@ def search_bazar_sk(keyword, min_price, max_price):
 st.divider()
 
 # 6. TESTOVACIE ROZHRANIE
-st.subheader("🧪 Testovacie rozhranie (Dnešné inzeráty)")
-st.write(f"Aktuálny čas: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá dnešné inzeráty.")
+st.subheader("🧪 Testovacie rozhranie (Inzeráty)")
+st.write(f"Aktuálny čas: **{datetime.now().strftime('%d.%m.%Y')}**. Tlačidlo vyhľadá inzeráty.")
 
-if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
-    with st.spinner("Sťahujem dnešné inzeráty z vybraných portálov..."):
+if st.button("🧪 Spustiť test: Zobraziť inzeráty"):
+    with st.spinner("Sťahujem inzeráty z vybraných portálov..."):
         all_ads = []
         if bazos_sk:
             all_ads.extend(search_bazos(keyword, cena_od, cena_do, "sk"))
@@ -268,7 +263,7 @@ if st.button("🧪 Spustiť test: Zobraziť dnešné inzeráty"):
         with st.expander("🛠️ Zobraziť surový prehľad všetkých stiahnutých inzerátov (Debug)"):
             st.write(f"Celkovo stiahnutých položiek: {len(all_ads)}")
             for ad in all_ads:
-                st.write(f"- [{ad['platform']}] {ad['title']} | Čas/Dátum: `{ad.get('date_text')}` | Vyhovuje: **{ad['is_valid_time']}**")
+                st.write(f"- [{ad['platform']}] {ad['title']} | Čas/Dátum: `{ad.get('date_text')}`")
 
 st.divider()
 
